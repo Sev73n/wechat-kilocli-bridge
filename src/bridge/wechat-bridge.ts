@@ -3,15 +3,15 @@
 import path from "node:path";
 
 import {
-  createBridgeAdapter,
   resolveDefaultAdapterCommand,
 } from "./bridge-adapters.ts";
 import { delay } from "./bridge-adapters.shared.ts";
+import { BridgeController } from "./bridge-controller.ts";
 import { forwardWechatFinalReply } from "./bridge-final-reply.ts";
 import { migrateLegacyChannelFiles } from "../wechat/channel-config.ts";
 import { BridgeStateStore } from "./bridge-state.ts";
 import { reapOrphanedOpencodeProcesses, reapPeerBridgeProcesses } from "./bridge-process-reaper.ts";
-import { clearLocalCompanionEndpoint } from "../companion/local-companion-link.ts";
+import { createRuntimeHost } from "../runtime/create-runtime-host.ts";
 import type {
   ApprovalRequest,
   BridgeAdapter,
@@ -408,10 +408,7 @@ async function main(): Promise<void> {
   // Clear any stale endpoint left by a previous bridge for this workspace.
   // This prevents `wechat-*` companions from reconnecting to a dead bridge
   // while the new runtime is still starting up.
-  clearLocalCompanionEndpoint(options.cwd);
-  stateStore.appendLog(`Cleared stale companion endpoint for ${options.cwd} before adapter start.`);
-
-  const adapter = createBridgeAdapter({
+  const adapter = createRuntimeHost({
     kind: options.adapter,
     command: options.command,
     cwd: options.cwd,
@@ -422,6 +419,9 @@ async function main(): Promise<void> {
     initialResumeConversationId: stateStore.getState().resumeConversationId,
     initialTranscriptPath: stateStore.getState().transcriptPath,
   });
+  const controller = new BridgeController(adapter, options.cwd);
+  controller.clearLocalClientEndpoint();
+  stateStore.appendLog(`Cleared stale companion endpoint for ${options.cwd} before adapter start.`);
   let textSendChain = Promise.resolve();
   let attachmentSendChain = Promise.resolve();
   let activeTask: ActiveTask | null = null;
@@ -576,6 +576,7 @@ async function main(): Promise<void> {
     } catch {
       // Best effort shutdown.
     }
+    controller.clearLocalClientEndpoint();
     stateStore.releaseLock();
   };
 
@@ -655,6 +656,9 @@ async function main(): Promise<void> {
       syncSharedSessionState: () => {
         syncSharedSessionState(stateStore, adapter);
       },
+      syncLocalClientEndpoint: () => {
+        controller.syncLocalClientEndpoint();
+      },
       requestShutdown,
     });
 
@@ -663,6 +667,7 @@ async function main(): Promise<void> {
       return;
     }
     syncSharedSessionState(stateStore, adapter);
+    controller.syncLocalClientEndpoint();
     stateStore.appendLog(
       `Bridge started with adapter=${options.adapter} command=${options.command} cwd=${options.cwd}`,
     );
@@ -870,6 +875,7 @@ function wireAdapterEvents(params: {
   clearActiveTask: () => void;
   updateLastOutputAt: () => void;
   syncSharedSessionState: () => void;
+  syncLocalClientEndpoint: () => void;
   requestShutdown: (message: string, exitCode?: number) => void;
 }): void {
   const {
@@ -885,11 +891,13 @@ function wireAdapterEvents(params: {
     clearActiveTask,
     updateLastOutputAt,
     syncSharedSessionState,
+    syncLocalClientEndpoint,
     requestShutdown,
   } = params;
 
   adapter.setEventSink((event) => {
     syncSharedSessionState();
+    syncLocalClientEndpoint();
     const adapterState = adapter.getState();
     const bridgeState = stateStore.getState();
     if (bridgeState.pendingConfirmation && !adapterState.pendingApproval) {

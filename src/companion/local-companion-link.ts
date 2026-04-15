@@ -11,6 +11,10 @@ import type {
   BridgeAdapterState,
   BridgeEvent,
 } from "../bridge/bridge-types.ts";
+import {
+  LOCAL_CLIENT_PROTOCOL_VERSION,
+  type LocalClientEndpoint,
+} from "../runtime/runtime-types.ts";
 
 export type LocalCompanionCommand =
   | { command: "send_input"; text: string }
@@ -30,24 +34,7 @@ export type LocalCompanionCloseReason =
   | "signal"
   | "worker_exit";
 
-export type LocalCompanionEndpoint = {
-  instanceId: string;
-  kind: BridgeAdapterKind;
-  port: number;
-  token: string;
-  renderMode?: "embedded" | "panel" | "companion";
-  bridgeOwnerPid?: number;
-  serverPort?: number;
-  serverUrl?: string;
-  cwd: string;
-  command: string;
-  profile?: string;
-  sharedSessionId?: string;
-  sharedThreadId?: string;
-  resumeConversationId?: string;
-  transcriptPath?: string;
-  startedAt: string;
-};
+export type LocalCompanionEndpoint = LocalClientEndpoint;
 
 export type LocalCompanionMessage =
   | {
@@ -114,6 +101,12 @@ function normalizeEndpoint(value: unknown): LocalCompanionEndpoint | null {
   }
 
   return {
+    protocolVersion:
+      typeof record.protocolVersion === "number"
+        ? record.protocolVersion
+        : LOCAL_CLIENT_PROTOCOL_VERSION,
+    runtimeKind:
+      record.runtimeKind === "codex_runtime_host" ? "codex_runtime_host" : "legacy_adapter",
     instanceId: record.instanceId,
     kind,
     port: record.port,
@@ -121,13 +114,16 @@ function normalizeEndpoint(value: unknown): LocalCompanionEndpoint | null {
     renderMode:
       record.renderMode === "embedded" ||
       record.renderMode === "panel" ||
-      record.renderMode === "companion"
+      record.renderMode === "companion" ||
+      record.renderMode === "headless"
         ? record.renderMode
         : undefined,
     bridgeOwnerPid:
       typeof record.bridgeOwnerPid === "number" ? record.bridgeOwnerPid : undefined,
     serverPort: typeof record.serverPort === "number" ? record.serverPort : undefined,
     serverUrl: typeof record.serverUrl === "string" ? record.serverUrl : undefined,
+    remoteAuthTokenEnv:
+      typeof record.remoteAuthTokenEnv === "string" ? record.remoteAuthTokenEnv : undefined,
     cwd: record.cwd,
     command: record.command,
     profile: typeof record.profile === "string" ? record.profile : undefined,
@@ -154,6 +150,7 @@ export function writeLocalCompanionEndpoint(endpoint: LocalCompanionEndpoint): v
   const { endpointFile } = ensureWorkspaceChannelDir(endpoint.cwd);
   const payload: LocalCompanionEndpoint = {
     ...endpoint,
+    protocolVersion: endpoint.protocolVersion ?? LOCAL_CLIENT_PROTOCOL_VERSION,
     sharedThreadId:
       endpoint.kind === "codex" || endpoint.kind === "opencode"
         ? endpoint.sharedSessionId ?? endpoint.sharedThreadId

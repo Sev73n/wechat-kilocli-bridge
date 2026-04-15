@@ -43,7 +43,7 @@
     "check": "node --no-warnings --experimental-strip-types src/wechat/wechat-channel.ts --check",
     "bridge": "node --no-warnings --experimental-strip-types src/bridge/wechat-bridge.ts",
     "bridge:codex": "node --no-warnings --experimental-strip-types src/bridge/wechat-bridge.ts --adapter codex",
-    "codex:panel": "node --no-warnings --experimental-strip-types src/companion/local-companion.ts --adapter codex",
+    "codex:panel": "node --no-warnings --experimental-strip-types src/companion/codex-remote-client.ts",
     "codex:start": "node --no-warnings --experimental-strip-types src/companion/local-companion-start.ts",
     "claude:start": "node --no-warnings --experimental-strip-types src/companion/local-companion-start.ts --adapter claude",
     "claude:companion": "node --no-warnings --experimental-strip-types src/companion/local-companion.ts --adapter claude",

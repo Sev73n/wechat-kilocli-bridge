@@ -1,5 +1,6 @@
 ﻿import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { spawn as spawnChild } from "node:child_process";
 import type { ChildProcess, ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
@@ -16,6 +17,11 @@ import {
 } from "./bridge-utils.ts";
 import { AbstractPtyAdapter } from "./bridge-adapters.core.ts";
 import * as shared from "./bridge-adapters.shared.ts";
+import {
+  CODEX_REMOTE_AUTH_TOKEN_ENV,
+  LOCAL_CLIENT_PROTOCOL_VERSION,
+  type LocalClientEndpoint,
+} from "../runtime/runtime-types.ts";
 
 type AdapterOptions = shared.AdapterOptions;
 type CodexActiveTurn = shared.CodexActiveTurn;
@@ -83,11 +89,15 @@ const {
 const CODEX_LOCAL_THREAD_ANNOUNCE_SETTLE_MS = 150;
 
 export class CodexPtyAdapter extends AbstractPtyAdapter {
+  readonly runtimeKind = "codex_runtime_host" as const;
+
   private appServer: ChildProcessWithoutNullStreams | null = null;
   private nativeProcess: ChildProcess | null = null;
   private appServerPort: number | null = null;
   private appServerShuttingDown = false;
   private appServerLog = "";
+  private appServerAuthToken: string | null = null;
+  private appServerAuthTokenFilePath: string | null = null;
   private rpcSocket: WebSocket | null = null;
   private rpcShuttingDown = false;
   private rpcReconnectPromise: Promise<boolean> | null = null;
@@ -137,6 +147,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private finalReplyCompletionTimer: ReturnType<typeof setTimeout> | null = null;
   private finalReplyCompletionTurnId: string | null = null;
   private resumeThreadId: string | null;
+  private readonly localClientInstanceId = `${process.pid}-${Date.now().toString(36)}`;
 
   constructor(options: AdapterOptions) {
     super(options);
@@ -152,6 +163,10 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       return;
     }
 
+    if (this.isHeadlessRuntimeMode()) {
+      this.setStatus("starting", `Starting ${this.options.kind} runtime host...`);
+    }
+
     await this.startAppServer();
     await this.connectRpcClient();
     await this.restoreInitialSharedThreadIfNeeded();
@@ -159,6 +174,15 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     try {
       if (this.isNativePanelMode()) {
         await this.startNativeClient();
+      } else if (this.isHeadlessRuntimeMode()) {
+        this.shuttingDown = false;
+        this.cleanPanelExitInProgress = false;
+        this.hasAcceptedInput = true;
+        this.state.pid = this.appServer?.pid ?? undefined;
+        this.state.startedAt = nowIso();
+        this.state.pendingApproval = null;
+        this.afterStart();
+        this.setStatus("idle", `${this.options.kind} adapter is ready.`);
       } else {
         await super.start();
       }
@@ -181,17 +205,17 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   protected override afterStart(): void {
-    this.warmupUntilMs = this.isNativePanelMode()
+    this.warmupUntilMs = this.usesRpcTurnTransport()
       ? 0
       : Date.now() + CODEX_STARTUP_WARMUP_MS;
-    if (!this.isNativePanelMode()) {
+    if (this.isEmbeddedCliMode()) {
       this.attachLocalInputForwarding();
     }
     this.startSessionPolling();
   }
 
   override async sendInput(text: string): Promise<void> {
-    if (this.isNativePanelMode()) {
+    if (this.usesRpcTurnTransport()) {
       await this.sendPanelTurn(text);
       return;
     }
@@ -243,7 +267,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   override async interrupt(): Promise<boolean> {
-    if (this.isNativePanelMode()) {
+    if (this.usesRpcTurnTransport()) {
       return await this.interruptPanelTurn();
     }
 
@@ -279,7 +303,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
   override async dispose(): Promise<void> {
     this.resetTurnTracking({ preserveThread: false });
-    if (!this.isNativePanelMode()) {
+    if (this.isEmbeddedCliMode()) {
       this.detachLocalInputForwarding();
     }
     this.stopSessionPolling();
@@ -294,10 +318,46 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       this.state.pendingApproval = null;
       this.state.status = "stopped";
       this.state.pid = undefined;
+      this.state.startedAt = undefined;
+    } else if (this.isHeadlessRuntimeMode()) {
+      this.clearCompletionTimer();
+      this.clearInterruptTimer();
+      this.clearPendingApprovalState();
+      this.state.status = "stopped";
+      this.state.pid = undefined;
+      this.state.startedAt = undefined;
     } else {
       await super.dispose();
     }
     await this.stopAppServer();
+  }
+
+  getLocalClientEndpoint(): LocalClientEndpoint | null {
+    if (!this.isHeadlessRuntimeMode() || !this.appServerPort || !this.appServerAuthToken) {
+      return null;
+    }
+
+    return {
+      protocolVersion: LOCAL_CLIENT_PROTOCOL_VERSION,
+      runtimeKind: this.runtimeKind,
+      instanceId: this.localClientInstanceId,
+      kind: this.options.kind,
+      port: this.appServerPort,
+      token: this.appServerAuthToken,
+      renderMode: "headless",
+      bridgeOwnerPid: process.pid,
+      serverPort: this.appServerPort,
+      serverUrl: `ws://${CODEX_APP_SERVER_HOST}:${this.appServerPort}`,
+      remoteAuthTokenEnv: CODEX_REMOTE_AUTH_TOKEN_ENV,
+      cwd: this.options.cwd,
+      command: this.options.command,
+      profile: this.options.profile,
+      sharedSessionId: this.state.sharedSessionId,
+      sharedThreadId: this.state.sharedThreadId,
+      resumeConversationId: this.state.resumeConversationId,
+      transcriptPath: this.state.transcriptPath,
+      startedAt: this.state.startedAt ?? nowIso(),
+    };
   }
 
   protected override handleData(rawText: string): void {
@@ -355,7 +415,22 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     return this.options.renderMode === "panel";
   }
 
+  private isHeadlessRuntimeMode(): boolean {
+    return this.options.renderMode === "headless";
+  }
+
+  private isEmbeddedCliMode(): boolean {
+    return !this.isNativePanelMode() && !this.isHeadlessRuntimeMode();
+  }
+
+  private usesRpcTurnTransport(): boolean {
+    return this.isNativePanelMode() || this.isHeadlessRuntimeMode();
+  }
+
   private isCodexClientRunning(): boolean {
+    if (this.isHeadlessRuntimeMode()) {
+      return Boolean(this.appServer);
+    }
     return this.isNativePanelMode() ? Boolean(this.nativeProcess) : Boolean(this.pty);
   }
 
@@ -848,7 +923,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   private async sendPanelTurn(text: string): Promise<void> {
-    if (!this.nativeProcess) {
+    if (this.isNativePanelMode() && !this.nativeProcess) {
       throw new Error("codex panel is not running.");
     }
     this.recoverStaleBusyStateIfNeeded();
@@ -920,7 +995,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   private async interruptPanelTurn(): Promise<boolean> {
-    if (!this.nativeProcess) {
+    if (this.isNativePanelMode() && !this.nativeProcess) {
       return false;
     }
 
@@ -954,6 +1029,13 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
     const port = await reserveLocalPort();
     const env = this.buildEnv();
+    const workspacePaths = ensureWorkspaceChannelDir(this.options.cwd);
+    const token = crypto.randomBytes(24).toString("hex");
+    const tokenFilePath = path.join(
+      workspacePaths.workspaceDir,
+      `codex-app-server-token-${this.localClientInstanceId}.txt`,
+    );
+    fs.writeFileSync(tokenFilePath, `${token}\n`, "utf8");
     const spawnTarget = resolveSpawnTarget(this.options.command, "codex");
     const child = spawnChild(
       spawnTarget.file,
@@ -962,6 +1044,10 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         "app-server",
         "--listen",
         `ws://${CODEX_APP_SERVER_HOST}:${port}`,
+        "--ws-auth",
+        "capability-token",
+        "--ws-token-file",
+        tokenFilePath,
       ],
       {
         cwd: this.options.cwd,
@@ -975,6 +1061,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     this.appServerPort = port;
     this.appServerShuttingDown = false;
     this.appServerLog = "";
+    this.appServerAuthToken = token;
+    this.appServerAuthTokenFilePath = tokenFilePath;
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -993,6 +1081,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       this.appServer = null;
       this.appServerPort = null;
       this.appServerShuttingDown = false;
+      this.deleteAppServerAuthTokenFile();
+      this.appServerAuthToken = null;
 
       if (expectedShutdown) {
         return;
@@ -1040,7 +1130,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
 
     while (Date.now() < deadline) {
       try {
-        const socket = await this.openRpcSocket(url, deadline - Date.now());
+        const socket = await this.openRpcSocket(
+          url,
+          this.appServerAuthToken,
+          deadline - Date.now(),
+        );
         this.attachRpcSocket(socket);
         await this.initializeRpcClient();
         return;
@@ -1054,9 +1148,21 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     throw new Error(`Failed to connect to Codex app-server websocket: ${lastError}`);
   }
 
-  private async openRpcSocket(url: string, timeoutMs: number): Promise<WebSocket> {
+  private async openRpcSocket(
+    url: string,
+    authToken: string | null,
+    timeoutMs: number,
+  ): Promise<WebSocket> {
+    if (!authToken) {
+      throw new Error("Codex app-server websocket auth token is unavailable.");
+    }
+
     return await new Promise<WebSocket>((resolve, reject) => {
-      const socket = new WebSocket(url);
+      const socket = new WebSocket(url, {
+        headers: {
+          Authorization: `Bearer ${authToken}`,
+        },
+      });
       let settled = false;
       const timer = setTimeout(() => {
         if (settled) {
@@ -2459,6 +2565,8 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     if (!this.appServer) {
       this.appServerPort = null;
       this.appServerShuttingDown = false;
+      this.deleteAppServerAuthTokenFile();
+      this.appServerAuthToken = null;
       return;
     }
 
@@ -2485,6 +2593,9 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
       const timer = setTimeout(() => finish(), 1_000);
       timer.unref?.();
     });
+
+    this.deleteAppServerAuthTokenFile();
+    this.appServerAuthToken = null;
   }
 
   private describeAppServerLog(): string {
@@ -2514,6 +2625,20 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
         // Best effort cleanup after panel client failure.
       }
     }
+  }
+
+  private deleteAppServerAuthTokenFile(): void {
+    if (!this.appServerAuthTokenFilePath) {
+      return;
+    }
+
+    try {
+      fs.unlinkSync(this.appServerAuthTokenFilePath);
+    } catch {
+      // Best effort cleanup after app-server shutdown.
+    }
+
+    this.appServerAuthTokenFilePath = null;
   }
 
   private attachLocalInputForwarding(): void {

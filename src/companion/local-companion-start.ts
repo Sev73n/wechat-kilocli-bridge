@@ -246,8 +246,11 @@ export function buildBackgroundBridgeArgs(
 }
 
 export function resolveForegroundClientEntryPath(
-  _adapter: LocalCompanionLaunchAdapter,
+  adapter: LocalCompanionLaunchAdapter,
 ): string {
+  if (adapter === "codex") {
+    return path.resolve(MODULE_DIR, "codex-remote-client.ts");
+  }
   return path.resolve(MODULE_DIR, "local-companion.ts");
 }
 
@@ -255,6 +258,16 @@ export function buildForegroundClientArgs(
   entryPath: string,
   options: LocalCompanionStartCliOptions,
 ): string[] {
+  if (options.adapter === "codex") {
+    return [
+      "--no-warnings",
+      "--experimental-strip-types",
+      entryPath,
+      "--cwd",
+      options.cwd,
+    ];
+  }
+
   return [
     "--no-warnings",
     "--experimental-strip-types",

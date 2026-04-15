@@ -62,7 +62,7 @@ export type AdapterOptions = {
   initialSharedThreadId?: string;
   initialResumeConversationId?: string;
   initialTranscriptPath?: string;
-  renderMode?: "embedded" | "panel" | "companion";
+  renderMode?: "embedded" | "panel" | "companion" | "headless";
 };
 
 export type EventSink = (event: BridgeEvent) => void;

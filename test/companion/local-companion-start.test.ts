@@ -99,13 +99,29 @@ describe("local-companion-start helpers", () => {
     ]);
   });
 
-  test("resolveForegroundClientEntryPath always launches the shared local companion entry", () => {
+  test("resolveForegroundClientEntryPath launches the codex remote client and shared companions", () => {
     expect(resolveForegroundClientEntryPath("codex")).toBe(
-      path.resolve(process.cwd(), "src", "companion", "local-companion.ts"),
+      path.resolve(process.cwd(), "src", "companion", "codex-remote-client.ts"),
     );
     expect(resolveForegroundClientEntryPath("opencode")).toBe(
       path.resolve(process.cwd(), "src", "companion", "local-companion.ts"),
     );
+  });
+
+  test("buildForegroundClientArgs keeps codex focused on the remote launcher entry", () => {
+    const args = buildForegroundClientArgs("/tmp/codex-remote-client.ts", {
+      adapter: "codex",
+      cwd: path.resolve("./tmp/project"),
+      timeoutMs: 15000,
+    });
+
+    expect(args).toEqual([
+      "--no-warnings",
+      "--experimental-strip-types",
+      "/tmp/codex-remote-client.ts",
+      "--cwd",
+      path.resolve("./tmp/project"),
+    ]);
   });
 
   test("buildForegroundClientArgs forwards the adapter for OpenCode too", () => {

@@ -7,6 +7,7 @@ import { createBridgeAdapter } from "../bridge/bridge-adapters.ts";
 import {
   LOCAL_COMPANION_RECONNECT_GRACE_MS,
 } from "../bridge/bridge-adapters.shared.ts";
+import { runCodexRemoteClientFromEndpoint } from "./codex-remote-client.ts";
 import {
   attachLocalCompanionMessageListener,
   readLocalCompanionEndpoint,
@@ -107,6 +108,14 @@ async function main(): Promise<void> {
   migrateLegacyChannelFiles((message) => log("local", message));
   const options = parseCliArgs(process.argv.slice(2));
   const initialEndpoint = readMatchingEndpoint(options);
+
+  if (
+    initialEndpoint.kind === "codex" &&
+    initialEndpoint.runtimeKind === "codex_runtime_host"
+  ) {
+    const exitCode = await runCodexRemoteClientFromEndpoint(initialEndpoint);
+    process.exit(exitCode);
+  }
 
   const adapter = createBridgeAdapter({
     kind: initialEndpoint.kind,
