@@ -3,11 +3,10 @@ import path from "node:path";
 
 import {
   buildBackgroundBridgeArgs,
-  buildForegroundClientArgs,
   isSameWorkspaceCwd,
   normalizeComparablePath,
   parseCliArgs,
-  resolveForegroundClientEntryPath,
+  runVisibleClient,
 } from "../../src/companion/local-companion-start.ts";
 
 describe("local-companion-start helpers", () => {
@@ -99,17 +98,91 @@ describe("local-companion-start helpers", () => {
     ]);
   });
 
-  test("resolveForegroundClientEntryPath launches the codex remote client and shared companions", () => {
-    expect(resolveForegroundClientEntryPath("codex")).toBe(
-      path.resolve(process.cwd(), "src", "companion", "codex-remote-client.ts"),
+  test("runVisibleClient routes codex through the in-process remote client", async () => {
+    const calls: Array<{ cwd: string }> = [];
+    const exitCode = await runVisibleClient(
+      {
+        adapter: "codex",
+        cwd: path.resolve("./tmp/project"),
+        timeoutMs: 15000,
+      },
+      {
+        codexRemoteClient: async (options) => {
+          calls.push(options);
+          return 7;
+        },
+        localCompanion: async () => {
+          throw new Error("local companion should not be used for codex");
+        },
+      },
     );
-    expect(resolveForegroundClientEntryPath("opencode")).toBe(
-      path.resolve(process.cwd(), "src", "companion", "local-companion.ts"),
-    );
+
+    expect(exitCode).toBe(7);
+    expect(calls).toEqual([
+      {
+        cwd: path.resolve("./tmp/project"),
+      },
+    ]);
   });
 
-  test("buildForegroundClientArgs keeps codex focused on the remote launcher entry", () => {
-    const args = buildForegroundClientArgs("/tmp/codex-remote-client.ts", {
+  test("runVisibleClient routes OpenCode through the shared in-process companion", async () => {
+    const calls: Array<{ adapter: string; cwd: string }> = [];
+    const exitCode = await runVisibleClient(
+      {
+        adapter: "opencode",
+        cwd: path.resolve("./tmp/project"),
+        timeoutMs: 15000,
+      },
+      {
+        codexRemoteClient: async () => {
+          throw new Error("codex remote client should not be used for opencode");
+        },
+        localCompanion: async (options) => {
+          calls.push(options);
+          return 9;
+        },
+      },
+    );
+
+    expect(exitCode).toBe(9);
+    expect(calls).toEqual([
+      {
+        adapter: "opencode",
+        cwd: path.resolve("./tmp/project"),
+      },
+    ]);
+  });
+
+  test("runVisibleClient keeps adapter forwarding for local companions", async () => {
+    const calls: Array<{ adapter: string; cwd: string }> = [];
+    const exitCode = await runVisibleClient(
+      {
+        adapter: "claude",
+        cwd: path.resolve("./tmp/project"),
+        timeoutMs: 15000,
+      },
+      {
+        codexRemoteClient: async () => {
+          throw new Error("codex remote client should not be used for claude");
+        },
+        localCompanion: async (options) => {
+          calls.push(options);
+          return 11;
+        },
+      },
+    );
+
+    expect(exitCode).toBe(11);
+    expect(calls).toEqual([
+      {
+        adapter: "claude",
+        cwd: path.resolve("./tmp/project"),
+      },
+    ]);
+  });
+
+  test("buildBackgroundBridgeArgs keeps the launch cwd stable for codex", () => {
+    const args = buildBackgroundBridgeArgs("/tmp/wechat-bridge.ts", {
       adapter: "codex",
       cwd: path.resolve("./tmp/project"),
       timeoutMs: 15000,
@@ -118,45 +191,13 @@ describe("local-companion-start helpers", () => {
     expect(args).toEqual([
       "--no-warnings",
       "--experimental-strip-types",
-      "/tmp/codex-remote-client.ts",
-      "--cwd",
-      path.resolve("./tmp/project"),
-    ]);
-  });
-
-  test("buildForegroundClientArgs forwards the adapter for OpenCode too", () => {
-    const args = buildForegroundClientArgs("/tmp/local-companion.ts", {
-      adapter: "opencode",
-      cwd: path.resolve("./tmp/project"),
-      timeoutMs: 15000,
-    });
-
-    expect(args).toEqual([
-      "--no-warnings",
-      "--experimental-strip-types",
-      "/tmp/local-companion.ts",
+      "/tmp/wechat-bridge.ts",
       "--adapter",
-      "opencode",
+      "codex",
       "--cwd",
       path.resolve("./tmp/project"),
-    ]);
-  });
-
-  test("buildForegroundClientArgs keeps adapter forwarding for local companions", () => {
-    const args = buildForegroundClientArgs("/tmp/local-companion.ts", {
-      adapter: "claude",
-      cwd: path.resolve("./tmp/project"),
-      timeoutMs: 15000,
-    });
-
-    expect(args).toEqual([
-      "--no-warnings",
-      "--experimental-strip-types",
-      "/tmp/local-companion.ts",
-      "--adapter",
-      "claude",
-      "--cwd",
-      path.resolve("./tmp/project"),
+      "--lifecycle",
+      "companion_bound",
     ]);
   });
 

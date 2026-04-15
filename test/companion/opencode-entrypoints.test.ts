@@ -23,7 +23,8 @@ describe("OpenCode CLI entrypoints", () => {
   test("wechat-opencode-start keeps the bridge bootstrap flow", () => {
     const source = readRepoFile("bin/wechat-opencode-start.mjs");
 
-    expect(source).toContain('runTsEntry("src/companion/local-companion-start.ts", ["--adapter", "opencode"])');
+    expect(source).toContain('from "../src/companion/local-companion-start.ts"');
+    expect(source).toContain('await main(["--adapter", "opencode", ...process.argv.slice(2)])');
   });
 
   test("package scripts route opencode through the shared companion launcher", () => {

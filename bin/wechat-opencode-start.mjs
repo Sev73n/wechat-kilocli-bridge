@@ -1,5 +1,5 @@
 #!/usr/bin/env node
 
-import { runTsEntry } from "./_run-entry.mjs";
+import { main } from "../src/companion/local-companion-start.ts";
 
-runTsEntry("src/companion/local-companion-start.ts", ["--adapter", "opencode"]);
+await main(["--adapter", "opencode", ...process.argv.slice(2)]);

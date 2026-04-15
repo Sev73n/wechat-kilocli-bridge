@@ -22,6 +22,8 @@ import {
   type LocalCompanionEndpoint,
 } from "./local-companion-link.ts";
 import type { BridgeAdapterKind } from "../bridge/bridge-types.ts";
+import { runCodexRemoteClient } from "./codex-remote-client.ts";
+import { runLocalCompanion } from "./local-companion.ts";
 
 type LocalCompanionLaunchAdapter = Exclude<BridgeAdapterKind, "shell">;
 
@@ -34,6 +36,11 @@ type LocalCompanionStartCliOptions = {
 
 type EndpointReadResult = {
   endpoint: LocalCompanionEndpoint | null;
+};
+
+type VisibleClientRunners = {
+  codexRemoteClient?: typeof runCodexRemoteClient;
+  localCompanion?: typeof runLocalCompanion;
 };
 
 const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -245,40 +252,6 @@ export function buildBackgroundBridgeArgs(
   return args;
 }
 
-export function resolveForegroundClientEntryPath(
-  adapter: LocalCompanionLaunchAdapter,
-): string {
-  if (adapter === "codex") {
-    return path.resolve(MODULE_DIR, "codex-remote-client.ts");
-  }
-  return path.resolve(MODULE_DIR, "local-companion.ts");
-}
-
-export function buildForegroundClientArgs(
-  entryPath: string,
-  options: LocalCompanionStartCliOptions,
-): string[] {
-  if (options.adapter === "codex") {
-    return [
-      "--no-warnings",
-      "--experimental-strip-types",
-      entryPath,
-      "--cwd",
-      options.cwd,
-    ];
-  }
-
-  return [
-    "--no-warnings",
-    "--experimental-strip-types",
-    entryPath,
-    "--adapter",
-    options.adapter,
-    "--cwd",
-    options.cwd,
-  ];
-}
-
 function startBridgeInBackground(options: LocalCompanionStartCliOptions): void {
   const entryPath = path.resolve(MODULE_DIR, "..", "bridge", "wechat-bridge.ts");
   const args = buildBackgroundBridgeArgs(entryPath, options);
@@ -360,30 +333,28 @@ async function ensureBridgeReady(options: LocalCompanionStartCliOptions): Promis
   await waitForEndpoint(options.cwd, options.adapter, options.timeoutMs);
 }
 
-async function runVisibleClient(options: LocalCompanionStartCliOptions): Promise<number> {
-  const entryPath = resolveForegroundClientEntryPath(options.adapter);
-  const args = buildForegroundClientArgs(entryPath, options);
-
-  return await new Promise<number>((resolve, reject) => {
-    const child = spawn(process.execPath, args, {
+export async function runVisibleClient(
+  options: LocalCompanionStartCliOptions,
+  runners: VisibleClientRunners = {},
+): Promise<number> {
+  // Keep the foreground client in-process so Windows does not briefly flash an
+  // extra bootstrap console before the real companion UI appears.
+  if (options.adapter === "codex") {
+    return await (runners.codexRemoteClient ?? runCodexRemoteClient)({
       cwd: options.cwd,
-      env: process.env,
-      stdio: "inherit",
     });
+  }
 
-    child.once("error", (error) => reject(error));
-    child.once("exit", (code, signal) => {
-      if (signal) {
-        process.kill(process.pid, signal);
-        return;
-      }
-      resolve(code ?? 0);
-    });
+  return await (runners.localCompanion ?? runLocalCompanion)({
+    adapter: options.adapter,
+    cwd: options.cwd,
   });
 }
 
-async function main(): Promise<void> {
-  const options = parseCliArgs(process.argv.slice(2));
+export async function runLocalCompanionStart(
+  argv: string[] = process.argv.slice(2),
+): Promise<number> {
+  const options = parseCliArgs(argv);
   migrateLegacyChannelFiles((message) => log(options.adapter, message));
 
   if (!fs.existsSync(CREDENTIALS_FILE)) {
@@ -391,21 +362,27 @@ async function main(): Promise<void> {
   }
 
   await ensureBridgeReady(options);
-  const exitCode = await runVisibleClient(options);
-  process.exit(exitCode);
+  return await runVisibleClient(options);
 }
 
-const isDirectRun = Boolean((import.meta as ImportMeta & { main?: boolean }).main);
-if (isDirectRun) {
-  main().catch((error) => {
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  try {
+    const exitCode = await runLocalCompanionStart(argv);
+    process.exit(exitCode);
+  } catch (error) {
     const adapter = (() => {
       try {
-        return parseCliArgs(process.argv.slice(2)).adapter;
+        return parseCliArgs(argv).adapter;
       } catch {
         return DEFAULT_ADAPTER;
       }
     })();
     log(adapter, error instanceof Error ? error.message : String(error));
     process.exit(1);
-  });
+  }
+}
+
+const isDirectRun = Boolean((import.meta as ImportMeta & { main?: boolean }).main);
+if (isDirectRun) {
+  void main();
 }

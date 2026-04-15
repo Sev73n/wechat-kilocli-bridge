@@ -24,7 +24,7 @@ function log(adapter: string, message: string): void {
   process.stderr.write(`[${adapter}-companion] ${message}\n`);
 }
 
-type LocalCompanionCliOptions = {
+export type LocalCompanionCliOptions = {
   adapter: "codex" | "claude" | "opencode";
   cwd: string;
 };
@@ -104,17 +104,14 @@ export function shouldReconnectLocalCompanion(params: {
   return !params.shuttingDown && !params.closeReason;
 }
 
-async function main(): Promise<void> {
-  migrateLegacyChannelFiles((message) => log("local", message));
-  const options = parseCliArgs(process.argv.slice(2));
+export async function runLocalCompanion(options: LocalCompanionCliOptions): Promise<number> {
   const initialEndpoint = readMatchingEndpoint(options);
 
   if (
     initialEndpoint.kind === "codex" &&
     initialEndpoint.runtimeKind === "codex_runtime_host"
   ) {
-    const exitCode = await runCodexRemoteClientFromEndpoint(initialEndpoint);
-    process.exit(exitCode);
+    return await runCodexRemoteClientFromEndpoint(initialEndpoint);
   }
 
   const adapter = createBridgeAdapter({
@@ -134,6 +131,11 @@ async function main(): Promise<void> {
   let activeSocket: net.Socket | null = null;
   let detachListener: (() => void) | null = null;
   let reconnectPromise: Promise<boolean> | null = null;
+  let resolveExitCode: ((code: number) => void) | null = null;
+  const exitCodePromise = new Promise<number>((resolve) => {
+    resolveExitCode = resolve;
+  });
+  let signalHandlersRegistered = false;
 
   const detachActiveSocket = (destroy = false) => {
     const socket = activeSocket;
@@ -152,6 +154,28 @@ async function main(): Promise<void> {
       } catch {
         // Best effort cleanup.
       }
+    }
+  };
+
+  const resolveExit = (code: number) => {
+    const resolve = resolveExitCode;
+    if (!resolve) {
+      return;
+    }
+    resolveExitCode = null;
+    resolve(code);
+  };
+
+  const unregisterSignalHandlers = () => {
+    if (!signalHandlersRegistered) {
+      return;
+    }
+    signalHandlersRegistered = false;
+    process.removeListener("SIGINT", handleSigint);
+    process.removeListener("SIGTERM", handleSigterm);
+    process.removeListener("SIGHUP", handleSighup);
+    if (process.platform === "win32") {
+      process.removeListener("SIGBREAK", handleSigbreak);
     }
   };
 
@@ -213,7 +237,7 @@ async function main(): Promise<void> {
     } catch {
       // Best effort cleanup.
     }
-    process.exit(exitCode);
+    resolveExit(exitCode);
   };
 
   const handleBridgeRequest = async (
@@ -453,30 +477,50 @@ async function main(): Promise<void> {
     void closeCompanion(0, "signal");
   };
 
-  process.once("SIGINT", () => requestSignalShutdown("SIGINT"));
-  process.once("SIGTERM", () => requestSignalShutdown("SIGTERM"));
-  process.once("SIGHUP", () => requestSignalShutdown("SIGHUP"));
-  if (process.platform === "win32") {
-    process.once("SIGBREAK", () => requestSignalShutdown("SIGBREAK"));
-  }
+  const handleSigint = () => requestSignalShutdown("SIGINT");
+  const handleSigterm = () => requestSignalShutdown("SIGTERM");
+  const handleSighup = () => requestSignalShutdown("SIGHUP");
+  const handleSigbreak = () => requestSignalShutdown("SIGBREAK");
 
-  await connectToBridge(initialEndpoint);
-  await adapter.start();
-  publishState();
-  log(options.adapter, `Connected to bridge ${initialEndpoint.instanceId}.`);
+  process.once("SIGINT", handleSigint);
+  process.once("SIGTERM", handleSigterm);
+  process.once("SIGHUP", handleSighup);
+  if (process.platform === "win32") {
+    process.once("SIGBREAK", handleSigbreak);
+  }
+  signalHandlersRegistered = true;
+
+  try {
+    await connectToBridge(initialEndpoint);
+    await adapter.start();
+    publishState();
+    log(options.adapter, `Connected to bridge ${initialEndpoint.instanceId}.`);
+    return await exitCodePromise;
+  } finally {
+    unregisterSignalHandlers();
+  }
 }
 
-const isDirectRun = Boolean((import.meta as ImportMeta & { main?: boolean }).main);
-if (isDirectRun) {
-  main().catch((error) => {
+export async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
+  migrateLegacyChannelFiles((message) => log("local", message));
+  try {
+    const options = parseCliArgs(argv);
+    const exitCode = await runLocalCompanion(options);
+    process.exit(exitCode);
+  } catch (error) {
     const adapter = (() => {
       try {
-        return parseCliArgs(process.argv.slice(2)).adapter;
+        return parseCliArgs(argv).adapter;
       } catch {
         return "local";
       }
     })();
     log(adapter, error instanceof Error ? error.message : String(error));
     process.exit(1);
-  });
+  }
+}
+
+const isDirectRun = Boolean((import.meta as ImportMeta & { main?: boolean }).main);
+if (isDirectRun) {
+  void main();
 }

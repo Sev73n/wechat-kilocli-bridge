@@ -17,6 +17,7 @@ import {
 } from "./bridge-utils.ts";
 import { AbstractPtyAdapter } from "./bridge-adapters.core.ts";
 import * as shared from "./bridge-adapters.shared.ts";
+import { ensureWorkspaceChannelDir } from "../wechat/channel-config.ts";
 import {
   CODEX_REMOTE_AUTH_TOKEN_ENV,
   LOCAL_CLIENT_PROTOCOL_VERSION,
