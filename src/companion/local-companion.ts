@@ -27,11 +27,13 @@ function log(adapter: string, message: string): void {
 export type LocalCompanionCliOptions = {
   adapter: "codex" | "claude" | "opencode";
   cwd: string;
+  cliArgs: string[];
 };
 
 function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
   let adapter: "codex" | "claude" | "opencode" | null = null;
   let cwd = process.cwd();
+  const cliArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -40,9 +42,10 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         [
-          "Usage: local-companion --adapter <codex|claude|opencode> [--cwd <path>]",
+          "Usage: local-companion --adapter <codex|claude|opencode> [--cwd <path>] [...cli args]",
           "",
           'Starts the visible local companion and connects it to the matching running bridge for the current directory.',
+          "Unknown arguments are forwarded to the visible CLI client.",
           "",
         ].join("\n"),
       );
@@ -67,14 +70,14 @@ function parseCliArgs(argv: string[]): LocalCompanionCliOptions {
       continue;
     }
 
-    throw new Error(`Unknown argument: ${arg}`);
+    cliArgs.push(arg);
   }
 
   if (!adapter) {
     throw new Error("Missing required --adapter <codex|claude|opencode>");
   }
 
-  return { adapter, cwd };
+  return { adapter, cwd, cliArgs };
 }
 
 function delay(ms: number): Promise<void> {
@@ -111,7 +114,9 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
     initialEndpoint.kind === "codex" &&
     initialEndpoint.runtimeKind === "codex_runtime_host"
   ) {
-    return await runCodexRemoteClientFromEndpoint(initialEndpoint);
+    return await runCodexRemoteClientFromEndpoint(initialEndpoint, {
+      extraCliArgs: options.cliArgs,
+    });
   }
 
   const adapter = createBridgeAdapter({
@@ -124,6 +129,7 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
     initialResumeConversationId: initialEndpoint.resumeConversationId,
     initialTranscriptPath: initialEndpoint.transcriptPath,
     renderMode: initialEndpoint.kind === "codex" ? "panel" : "companion",
+    extraCliArgs: options.cliArgs,
   });
 
   let shuttingDown = false;

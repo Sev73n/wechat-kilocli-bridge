@@ -16,6 +16,7 @@ export type BridgeWorkerStatus =
   | "idle"
   | "busy"
   | "awaiting_approval"
+  | "awaiting_input"
   | "stopped"
   | "error";
 
@@ -37,6 +38,29 @@ export type ApprovalRequest = {
 
 export type PendingApproval = ApprovalRequest & {
   code: string;
+  createdAt: string;
+};
+
+export type UserInputRequestOption = {
+  label: string;
+  description: string;
+};
+
+export type UserInputRequestQuestion = {
+  id: string;
+  header: string;
+  question: string;
+  isOther: boolean;
+  isSecret: boolean;
+  options?: UserInputRequestOption[] | null;
+};
+
+export type UserInputRequest = {
+  summary: string;
+  questions: UserInputRequestQuestion[];
+};
+
+export type PendingUserInputRequest = UserInputRequest & {
   createdAt: string;
 };
 
@@ -64,6 +88,7 @@ export type BridgeState = {
   resumeConversationId?: string;
   transcriptPath?: string;
   pendingConfirmation?: PendingApproval | null;
+  pendingUserInput?: PendingUserInputRequest | null;
   lastActivityAt?: string;
 };
 
@@ -92,6 +117,8 @@ export type BridgeAdapterState = {
   activeTurnId?: string;
   activeTurnOrigin?: BridgeTurnOrigin;
   pendingApprovalOrigin?: BridgeTurnOrigin;
+  pendingUserInput?: UserInputRequest | null;
+  pendingUserInputOrigin?: BridgeTurnOrigin;
 };
 
 export type BridgeEvent =
@@ -125,6 +152,11 @@ export type BridgeEvent =
   | {
       type: "approval_required";
       request: ApprovalRequest | PendingApproval;
+      timestamp: string;
+    }
+  | {
+      type: "user_input_required";
+      request: UserInputRequest | PendingUserInputRequest;
       timestamp: string;
     }
   | {
@@ -180,6 +212,7 @@ export interface BridgeAdapter {
   interrupt(): Promise<boolean>;
   reset(): Promise<void>;
   resolveApproval(action: "confirm" | "deny"): Promise<boolean>;
+  submitUserInput(answers: Record<string, string[]>): Promise<boolean>;
   dispose(): Promise<void>;
   getState(): BridgeAdapterState;
 }

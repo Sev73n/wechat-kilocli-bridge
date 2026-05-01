@@ -181,6 +181,10 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     return Boolean(result);
   }
 
+  async submitUserInput(_answers: Record<string, string[]>): Promise<boolean> {
+    return false;
+  }
+
   async dispose(): Promise<void> {
     this.shuttingDown = true;
     this.expectedCloseReason = null;
@@ -658,6 +662,10 @@ export abstract class AbstractPtyAdapter implements BridgeAdapter {
     this.pendingApproval = null;
     this.state.pendingApproval = null;
     return true;
+  }
+
+  async submitUserInput(_answers: Record<string, string[]>): Promise<boolean> {
+    return false;
   }
 
   async dispose(): Promise<void> {

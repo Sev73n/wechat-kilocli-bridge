@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 
 import {
+  assertNoReservedExtraCliArgs,
   buildCliEnvironment,
   buildCodexCliArgs,
   resolveSpawnTarget,
@@ -17,6 +18,7 @@ import { CODEX_REMOTE_AUTH_TOKEN_ENV } from "../runtime/runtime-types.ts";
 
 type CodexRemoteClientCliOptions = {
   cwd: string;
+  cliArgs: string[];
 };
 
 function log(message: string): void {
@@ -25,6 +27,7 @@ function log(message: string): void {
 
 export function parseCliArgs(argv: string[]): CodexRemoteClientCliOptions {
   let cwd = process.cwd();
+  const cliArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -33,9 +36,10 @@ export function parseCliArgs(argv: string[]): CodexRemoteClientCliOptions {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         [
-          "Usage: wechat-codex [--cwd <path>]",
+          "Usage: wechat-codex [--cwd <path>] [...codex args]",
           "",
           'Starts the visible native Codex client and connects it to the running "wechat-bridge-codex" instance for the current directory.',
+          "Unknown arguments are forwarded to the Codex client.",
           "",
         ].join("\n"),
       );
@@ -51,10 +55,10 @@ export function parseCliArgs(argv: string[]): CodexRemoteClientCliOptions {
       continue;
     }
 
-    throw new Error(`Unknown argument: ${arg}`);
+    cliArgs.push(arg);
   }
 
-  return { cwd };
+  return { cwd, cliArgs };
 }
 
 export function readCodexRuntimeEndpoint(cwd: string): LocalCompanionEndpoint {
@@ -74,14 +78,23 @@ export function readCodexRuntimeEndpoint(cwd: string): LocalCompanionEndpoint {
   return endpoint;
 }
 
-export function buildRemoteCodexClientArgs(endpoint: LocalCompanionEndpoint): string[] {
+export function buildRemoteCodexClientArgs(
+  endpoint: LocalCompanionEndpoint,
+  options: { extraCliArgs?: string[] } = {},
+): string[] {
+  const extraCliArgs = options.extraCliArgs ?? [];
+  assertNoReservedExtraCliArgs(
+    extraCliArgs,
+    ["--remote", "--remote-auth-token-env"],
+    "Codex remote connection",
+  );
   const remoteUrl = endpoint.serverUrl ?? `ws://127.0.0.1:${endpoint.serverPort ?? endpoint.port}`;
   const args = buildCodexCliArgs(remoteUrl, {
     profile: endpoint.profile,
     resumeThreadId: endpoint.sharedThreadId,
   });
   const tokenEnvName = endpoint.remoteAuthTokenEnv ?? CODEX_REMOTE_AUTH_TOKEN_ENV;
-  return [...args, "--remote-auth-token-env", tokenEnvName];
+  return [...args, "--remote-auth-token-env", tokenEnvName, ...extraCliArgs];
 }
 
 export function buildRemoteCodexClientEnv(
@@ -96,9 +109,12 @@ export function buildRemoteCodexClientEnv(
 
 export async function runCodexRemoteClientFromEndpoint(
   endpoint: LocalCompanionEndpoint,
+  options: { extraCliArgs?: string[] } = {},
 ): Promise<number> {
   const spawnTarget = resolveSpawnTarget(endpoint.command, "codex");
-  const args = buildRemoteCodexClientArgs(endpoint);
+  const args = buildRemoteCodexClientArgs(endpoint, {
+    extraCliArgs: options.extraCliArgs,
+  });
   const env = buildRemoteCodexClientEnv(endpoint);
 
   return await new Promise<number>((resolve, reject) => {
@@ -128,7 +144,9 @@ export async function runCodexRemoteClient(
   options: CodexRemoteClientCliOptions,
 ): Promise<number> {
   const endpoint = readCodexRuntimeEndpoint(options.cwd);
-  return await runCodexRemoteClientFromEndpoint(endpoint);
+  return await runCodexRemoteClientFromEndpoint(endpoint, {
+    extraCliArgs: options.cliArgs,
+  });
 }
 
 async function main(): Promise<void> {

@@ -126,6 +126,31 @@ describe("OpenCodeServerAdapter initial state", () => {
 
     expect(adapter.getState().profile).toBe("wechat");
   });
+
+  test("appends extra CLI args only to the visible attach command", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+      extraCliArgs: ["--theme", "system"],
+    });
+    const internal = adapter as unknown as {
+      serverPort: number;
+      activeSessionId: string | null;
+      buildNativeAttachArgs(): Promise<string[]>;
+    };
+
+    internal.serverPort = 8123;
+    internal.activeSessionId = null;
+
+    await expect(internal.buildNativeAttachArgs()).resolves.toEqual([
+      "attach",
+      "http://127.0.0.1:8123",
+      "--theme",
+      "system",
+    ]);
+  });
 });
 
 /* ------------------------------------------------------------------ */

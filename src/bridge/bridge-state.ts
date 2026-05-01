@@ -11,6 +11,7 @@ import type {
   BridgeLifecycleMode,
   BridgeState,
   PendingApproval,
+  PendingUserInputRequest,
 } from "./bridge-types.ts";
 import { buildInstanceId } from "./bridge-utils.ts";
 
@@ -297,12 +298,16 @@ export class BridgeStateStore {
       transcriptPath: persistedTranscriptPath,
       lastActivityAt: persisted?.lastActivityAt,
       pendingConfirmation: null,
+      pendingUserInput: null,
     };
 
     this.save();
 
     if (persisted?.pendingConfirmation) {
       this.appendLog("Cleared stale pending confirmation from previous bridge session.");
+    }
+    if (persisted?.pendingUserInput) {
+      this.appendLog("Cleared stale pending user input request from previous bridge session.");
     }
   }
 
@@ -325,6 +330,19 @@ export class BridgeStateStore {
       return;
     }
     this.state.pendingConfirmation = null;
+    this.save();
+  }
+
+  setPendingUserInput(pending: PendingUserInputRequest): void {
+    this.state.pendingUserInput = pending;
+    this.save();
+  }
+
+  clearPendingUserInput(): void {
+    if (!this.state.pendingUserInput) {
+      return;
+    }
+    this.state.pendingUserInput = null;
     this.save();
   }
 

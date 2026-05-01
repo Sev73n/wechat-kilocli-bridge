@@ -43,6 +43,8 @@ import type {
   BridgeThreadSwitchReason,
   BridgeThreadSwitchSource,
   BridgeTurnOrigin,
+  UserInputRequest,
+  UserInputRequestOption,
 } from "./bridge-types.ts";
 import {
   detectCliApproval,
@@ -57,6 +59,7 @@ export type AdapterOptions = {
   command: string;
   cwd: string;
   profile?: string;
+  extraCliArgs?: string[];
   lifecycle?: BridgeLifecycleMode;
   initialSharedSessionId?: string;
   initialSharedThreadId?: string;
@@ -94,6 +97,14 @@ export type CodexQueuedNotification = {
 export type CodexPendingApprovalRequest = {
   requestId: CodexRpcRequestId;
   method: "item/commandExecution/requestApproval" | "item/fileChange/requestApproval";
+  threadId: string;
+  turnId: string;
+  origin: BridgeTurnOrigin;
+};
+
+export type CodexPendingUserInputRequest = {
+  requestId: CodexRpcRequestId;
+  method: "item/tool/requestUserInput";
   threadId: string;
   turnId: string;
   origin: BridgeTurnOrigin;
@@ -296,8 +307,15 @@ export function buildCodexCliArgs(
     profile?: string;
     inlineMode?: boolean;
     resumeThreadId?: string;
+    extraCliArgs?: string[];
   } = {},
 ): string[] {
+  assertNoReservedExtraCliArgs(
+    options.extraCliArgs ?? [],
+    ["--remote", "--remote-auth-token-env"],
+    "Codex remote connection",
+  );
+
   const args: string[] = [];
 
   if (options.resumeThreadId) {
@@ -314,7 +332,7 @@ export function buildCodexCliArgs(
     args.push("--profile", options.profile);
   }
 
-  return args;
+  return [...args, ...(options.extraCliArgs ?? [])];
 }
 
 export function hasClaudeNoAltScreenOption(helpText: string): boolean {
@@ -326,7 +344,14 @@ export function buildClaudeCliArgs(options: {
   resumeConversationId?: string | null;
   profile?: string;
   includeNoAltScreen?: boolean;
+  extraCliArgs?: string[];
 }): string[] {
+  assertNoReservedExtraCliArgs(
+    options.extraCliArgs ?? [],
+    ["--settings"],
+    "Claude companion settings",
+  );
+
   const args: string[] = [];
   if (options.includeNoAltScreen) {
     args.push("--no-alt-screen");
@@ -338,7 +363,22 @@ export function buildClaudeCliArgs(options: {
   if (options.profile) {
     args.push("--profile", options.profile);
   }
-  return args;
+  return [...args, ...(options.extraCliArgs ?? [])];
+}
+
+export function assertNoReservedExtraCliArgs(
+  args: string[],
+  reservedOptions: string[],
+  owner: string,
+): void {
+  const blocked = args.find((arg) =>
+    reservedOptions.some((option) => arg === option || arg.startsWith(`${option}=`)),
+  );
+  if (!blocked) {
+    return;
+  }
+
+  throw new Error(`${owner} is managed by the WeChat bridge; do not pass ${blocked} as an extra CLI argument.`);
 }
 
 export function isClaudeInvalidResumeError(text: string): boolean {
@@ -428,6 +468,67 @@ export function buildCodexApprovalRequest(
   }
 
   return null;
+}
+
+export function buildCodexUserInputRequest(params: unknown): UserInputRequest | null {
+  if (!isRecord(params) || !Array.isArray(params.questions)) {
+    return null;
+  }
+
+  const questions = params.questions
+    .map((question) => {
+      if (!isRecord(question)) {
+        return null;
+      }
+
+      const id = typeof question.id === "string" ? question.id.trim() : "";
+      const header = typeof question.header === "string" ? question.header.trim() : "";
+      const prompt = typeof question.question === "string" ? normalizeOutput(question.question).trim() : "";
+      if (!id || !header || !prompt) {
+        return null;
+      }
+
+      const options: UserInputRequestOption[] | null = Array.isArray(question.options)
+        ? question.options
+            .map((option) => {
+              if (!isRecord(option)) {
+                return null;
+              }
+              const label = typeof option.label === "string" ? option.label.trim() : "";
+              const description =
+                typeof option.description === "string"
+                  ? normalizeOutput(option.description).trim()
+                  : "";
+              if (!label || !description) {
+                return null;
+              }
+              return {
+                label,
+                description,
+              };
+            })
+            .filter((option): option is UserInputRequestOption => Boolean(option))
+        : null;
+
+      return {
+        id,
+        header,
+        question: prompt,
+        isOther: question.isOther === true,
+        isSecret: question.isSecret === true,
+        options,
+      };
+    })
+    .filter((question): question is UserInputRequest["questions"][number] => Boolean(question));
+
+  if (questions.length === 0) {
+    return null;
+  }
+
+  return {
+    summary: "Codex needs more information before the tool can continue.",
+    questions,
+  };
 }
 
 export function extractCodexFinalTextFromItem(item: unknown): string | null {

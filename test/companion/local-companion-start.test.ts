@@ -15,24 +15,33 @@ describe("local-companion-start helpers", () => {
     expect(options.adapter).toBe("codex");
     expect(options.cwd).toBe(process.cwd());
     expect(options.timeoutMs).toBe(15000);
+    expect(options.cliArgs).toEqual([]);
   });
 
-  test("parseCliArgs parses adapter, cwd, profile, and timeout", () => {
+  test("parseCliArgs parses adapter, cwd, profile, timeout, and forwarded args", () => {
     const options = parseCliArgs([
       "--adapter",
       "claude",
       "--cwd",
       "./tmp/project",
+      "--model",
+      "sonnet",
       "--profile",
       "work",
       "--timeout-ms",
       "25000",
+      "--dangerously-skip-permissions",
     ]);
 
     expect(options.adapter).toBe("claude");
     expect(options.cwd).toBe(path.resolve("./tmp/project"));
     expect(options.profile).toBe("work");
     expect(options.timeoutMs).toBe(25000);
+    expect(options.cliArgs).toEqual([
+      "--model",
+      "sonnet",
+      "--dangerously-skip-permissions",
+    ]);
   });
 
   test("buildBackgroundBridgeArgs binds codex background bridge to the launcher lifetime", () => {
@@ -105,6 +114,7 @@ describe("local-companion-start helpers", () => {
         adapter: "codex",
         cwd: path.resolve("./tmp/project"),
         timeoutMs: 15000,
+        cliArgs: ["--yolo"],
       },
       {
         codexRemoteClient: async (options) => {
@@ -121,6 +131,7 @@ describe("local-companion-start helpers", () => {
     expect(calls).toEqual([
       {
         cwd: path.resolve("./tmp/project"),
+        cliArgs: ["--yolo"],
       },
     ]);
   });
@@ -132,6 +143,7 @@ describe("local-companion-start helpers", () => {
         adapter: "opencode",
         cwd: path.resolve("./tmp/project"),
         timeoutMs: 15000,
+        cliArgs: ["--mode", "build"],
       },
       {
         codexRemoteClient: async () => {
@@ -149,6 +161,7 @@ describe("local-companion-start helpers", () => {
       {
         adapter: "opencode",
         cwd: path.resolve("./tmp/project"),
+        cliArgs: ["--mode", "build"],
       },
     ]);
   });
@@ -160,6 +173,7 @@ describe("local-companion-start helpers", () => {
         adapter: "claude",
         cwd: path.resolve("./tmp/project"),
         timeoutMs: 15000,
+        cliArgs: ["--debug"],
       },
       {
         codexRemoteClient: async () => {
@@ -177,6 +191,7 @@ describe("local-companion-start helpers", () => {
       {
         adapter: "claude",
         cwd: path.resolve("./tmp/project"),
+        cliArgs: ["--debug"],
       },
     ]);
   });

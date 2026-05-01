@@ -32,6 +32,7 @@ type LocalCompanionStartCliOptions = {
   cwd: string;
   profile?: string;
   timeoutMs: number;
+  cliArgs: string[];
 };
 
 type EndpointReadResult = {
@@ -65,6 +66,7 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
   let cwd = process.cwd();
   let profile: string | undefined;
   let timeoutMs = DEFAULT_WAIT_TIMEOUT_MS;
+  const cliArgs: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -73,13 +75,14 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
     if (arg === "--help" || arg === "-h") {
       process.stdout.write(
         [
-          "Usage: wechat-codex-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>]",
-          "       wechat-claude-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>]",
-          "       wechat-opencode-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>]",
-          "       local-companion-start [--adapter <codex|claude|opencode>] [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>]",
+          "Usage: wechat-codex-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...codex args]",
+          "       wechat-claude-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...claude args]",
+          "       wechat-opencode-start [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...opencode args]",
+          "       local-companion-start [--adapter <codex|claude|opencode>] [--cwd <path>] [--profile <name-or-path>] [--timeout-ms <ms>] [...cli args]",
           "",
           "Starts or reuses a Codex, Claude, or OpenCode bridge for the current directory, waits for the local endpoint, then opens the visible companion or panel.",
           "All adapters are companion-bound: closing the companion/panel also stops the bridge.",
+          "Unknown arguments are forwarded to the visible CLI client.",
           "",
         ].join("\n"),
       );
@@ -126,10 +129,10 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
       continue;
     }
 
-    throw new Error(`Unknown argument: ${arg}`);
+    cliArgs.push(arg);
   }
 
-  return { adapter, cwd, profile, timeoutMs };
+  return { adapter, cwd, profile, timeoutMs, cliArgs };
 }
 
 function isPidAlive(pid: number): boolean {
@@ -342,12 +345,14 @@ export async function runVisibleClient(
   if (options.adapter === "codex") {
     return await (runners.codexRemoteClient ?? runCodexRemoteClient)({
       cwd: options.cwd,
+      cliArgs: options.cliArgs,
     });
   }
 
   return await (runners.localCompanion ?? runLocalCompanion)({
     adapter: options.adapter,
     cwd: options.cwd,
+    cliArgs: options.cliArgs,
   });
 }
 

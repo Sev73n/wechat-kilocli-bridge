@@ -13,6 +13,8 @@ import type {
   BridgeThreadSwitchReason,
   BridgeThreadSwitchSource,
   PendingApproval,
+  PendingUserInputRequest,
+  UserInputRequestQuestion,
 } from "./bridge-types.ts";
 
 const ANSI_ESCAPE_RE =
@@ -25,7 +27,8 @@ export type SystemCommand =
   | { type: "stop" }
   | { type: "reset" }
   | { type: "confirm"; code?: string }
-  | { type: "deny" };
+  | { type: "deny" }
+  | { type: "answer"; raw: string };
 
 export const MESSAGE_START_GRACE_MS = 5_000;
 const WECHAT_ATTACHMENT_SEND_INTENT_RE =
@@ -218,6 +221,8 @@ export function parseSystemCommand(text: string): SystemCommand | null {
       return argument ? { type: "confirm", code: argument } : null;
     case "/deny":
       return { type: "deny" };
+    case "/answer":
+      return argument ? { type: "answer", raw: argument } : null;
     default:
       return null;
   }
@@ -228,6 +233,7 @@ export function parseWechatControlCommand(
   options: {
     adapter: BridgeAdapterKind;
     hasPendingConfirmation: boolean;
+    hasPendingUserInput: boolean;
   },
 ): SystemCommand | null {
   const systemCommand = parseSystemCommand(text);
@@ -735,6 +741,7 @@ export function formatStatusReport(
   adapterState: BridgeAdapterState,
 ): string {
   const pending = bridgeState.pendingConfirmation;
+  const pendingUserInput = bridgeState.pendingUserInput;
   const persistedSharedSessionId =
     bridgeState.sharedSessionId ?? bridgeState.sharedThreadId;
   const sharedSessionId =
@@ -769,10 +776,12 @@ export function formatStatusReport(
     `active_turn_id: ${adapterState.activeTurnId ?? "(none)"}`,
     `active_turn_origin: ${adapterState.activeTurnOrigin ?? "(none)"}`,
     `pending_approval_origin: ${adapterState.pendingApprovalOrigin ?? "(none)"}`,
+    `pending_user_input_origin: ${adapterState.pendingUserInputOrigin ?? "(none)"}`,
     `last_activity_at: ${bridgeState.lastActivityAt ?? "(none)"}`,
     `last_input_at: ${adapterState.lastInputAt ?? "(none)"}`,
     `last_output_at: ${adapterState.lastOutputAt ?? "(none)"}`,
     `pending_confirmation: ${pending ? `${pending.source}:${pending.code}` : "(none)"}`,
+    `pending_user_input: ${pendingUserInput ? `${pendingUserInput.questions.length} question(s)` : "(none)"}`,
   ].join("\n");
 }
 
@@ -1170,6 +1179,243 @@ export function formatPendingApprovalReminder(
   }
 
   return `Approval is pending for ${pending.commandPreview}. Reply with /confirm ${pending.code} or /deny.`;
+}
+
+function formatUserInputQuestionLabel(
+  question: UserInputRequestQuestion,
+  index: number,
+): string {
+  return `${index + 1}. ${question.header} [id: ${question.id}]`;
+}
+
+function resolveUserInputQuestion(
+  pending: PendingUserInputRequest,
+  reference: string,
+): UserInputRequestQuestion | null {
+  const trimmed = reference.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    const index = Number(trimmed) - 1;
+    return pending.questions[index] ?? null;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  return (
+    pending.questions.find((question) => question.id.toLowerCase() === normalized) ?? null
+  );
+}
+
+function resolveUserInputOptionLabel(
+  question: UserInputRequestQuestion,
+  value: string,
+): string | null {
+  if (!question.options?.length) {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (/^\d+$/.test(trimmed)) {
+    const index = Number(trimmed) - 1;
+    return question.options[index]?.label ?? null;
+  }
+
+  const normalized = trimmed.toLowerCase();
+  return question.options.find((option) => option.label.toLowerCase() === normalized)?.label ?? null;
+}
+
+function parseSingleUserInputAnswer(
+  question: UserInputRequestQuestion,
+  rawValue: string,
+): { answers: string[] } | { error: string } {
+  const trimmed = normalizeOutput(rawValue).trim();
+  if (!trimmed) {
+    return {
+      error: `Question "${question.header}" requires an answer.`,
+    };
+  }
+
+  if (!question.options?.length) {
+    return {
+      answers: [trimmed],
+    };
+  }
+
+  const separatorIndex = trimmed.indexOf("|");
+  let selection = separatorIndex >= 0 ? trimmed.slice(0, separatorIndex).trim() : trimmed;
+  let note = separatorIndex >= 0 ? trimmed.slice(separatorIndex + 1).trim() : "";
+  const answers: string[] = [];
+
+  if (selection) {
+    const selectedLabel = resolveUserInputOptionLabel(question, selection);
+    if (selectedLabel) {
+      answers.push(selectedLabel);
+    } else if (question.isOther) {
+      note = note ? `${selection}; ${note}` : selection;
+      selection = "";
+    } else {
+      return {
+        error: `Question "${question.header}" expects an option number or label.`,
+      };
+    }
+  }
+
+  if (note) {
+    answers.push(`user_note: ${note}`);
+  }
+
+  if (answers.length === 0) {
+    return {
+      error: `Question "${question.header}" requires an answer.`,
+    };
+  }
+
+  return {
+    answers,
+  };
+}
+
+export function parsePendingUserInputAnswerCommand(
+  raw: string,
+  pending: PendingUserInputRequest,
+): { answers: Record<string, string[]>; preview: string } | { error: string } {
+  const input = normalizeOutput(raw).trim();
+  if (!input) {
+    return {
+      error: "Reply with /answer followed by your response.",
+    };
+  }
+
+  const answers: Record<string, string[]> = {};
+
+  if (pending.questions.length === 1) {
+    const question = pending.questions[0];
+    const parsed = parseSingleUserInputAnswer(question, input);
+    if ("error" in parsed) {
+      return parsed;
+    }
+    answers[question.id] = parsed.answers;
+  } else {
+    const segments = input
+      .split(/\s*(?:;|\n)\s*/)
+      .map((segment) => segment.trim())
+      .filter(Boolean);
+    if (segments.length === 0) {
+      return {
+        error: "Reply with /answer questionId=value; questionId2=value.",
+      };
+    }
+
+    for (const segment of segments) {
+      const separatorIndex = segment.indexOf("=");
+      if (separatorIndex <= 0) {
+        return {
+          error: `Each answer must use questionId=value. Invalid segment: ${segment}`,
+        };
+      }
+
+      const reference = segment.slice(0, separatorIndex).trim();
+      const rawValue = segment.slice(separatorIndex + 1).trim();
+      const question = resolveUserInputQuestion(pending, reference);
+      if (!question) {
+        return {
+          error: `Unknown question reference: ${reference}`,
+        };
+      }
+      if (answers[question.id]) {
+        return {
+          error: `Question "${question.id}" was answered more than once.`,
+        };
+      }
+
+      const parsed = parseSingleUserInputAnswer(question, rawValue);
+      if ("error" in parsed) {
+        return parsed;
+      }
+      answers[question.id] = parsed.answers;
+    }
+
+    const missing = pending.questions.filter((question) => !answers[question.id]);
+    if (missing.length > 0) {
+      return {
+        error: `Missing answers for: ${missing.map((question) => question.id).join(", ")}.`,
+      };
+    }
+  }
+
+  return {
+    answers,
+    preview: truncatePreview(
+      pending.questions
+        .map((question) => `${question.id}=${(answers[question.id] ?? []).join(", ")}`)
+        .join("; "),
+      180,
+    ),
+  };
+}
+
+export function formatUserInputRequestMessage(
+  pending: PendingUserInputRequest,
+  adapterState: BridgeAdapterState,
+): string {
+  const lines = [
+    pending.summary,
+    `adapter: ${adapterState.kind}`,
+  ];
+
+  const hasSecretQuestion = pending.questions.some((question) => question.isSecret);
+  if (hasSecretQuestion) {
+    lines.push("Warning: this prompt includes secret input upstream, but WeChat replies are not hidden.");
+  }
+
+  pending.questions.forEach((question, index) => {
+    lines.push("");
+    lines.push(formatUserInputQuestionLabel(question, index));
+    lines.push(question.question);
+    if (question.options?.length) {
+      lines.push("options:");
+      question.options.forEach((option, optionIndex) => {
+        lines.push(`  ${optionIndex + 1}. ${option.label} - ${truncatePreview(option.description, 160)}`);
+      });
+    }
+    if (question.isOther) {
+      lines.push("custom note: allowed");
+    }
+  });
+
+  lines.push("");
+  if (pending.questions.length === 1) {
+    const question = pending.questions[0];
+    if (question.options?.length) {
+      lines.push("Reply with /answer <option number or exact label>.");
+      if (question.isOther) {
+        lines.push('Add "| your note" to include extra context.');
+      }
+    } else {
+      lines.push("Reply with /answer <your answer>.");
+    }
+  } else {
+    lines.push("Reply with /answer questionId=value; questionId2=value.");
+    lines.push("You can use question numbers instead of ids.");
+    lines.push("For option questions, value can be the option number or exact label.");
+    lines.push('Add "| your note" after an option answer to include extra context.');
+  }
+  lines.push("Use /stop to interrupt the active turn instead.");
+
+  return lines.join("\n");
+}
+
+export function formatPendingUserInputReminder(
+  pending: PendingUserInputRequest,
+): string {
+  if (pending.questions.length === 1) {
+    const question = pending.questions[0];
+    return `Codex is waiting for user input for ${question.header}. Reply with /answer and your response, or use /stop to interrupt.`;
+  }
+
+  return `Codex is waiting for answers to ${pending.questions.length} questions. Reply with /answer questionId=value; questionId2=value, or use /stop to interrupt.`;
 }
 
 export class OutputBatcher {

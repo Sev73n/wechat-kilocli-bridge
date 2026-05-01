@@ -27,6 +27,7 @@ import {
 type AdapterOptions = shared.AdapterOptions;
 type CodexActiveTurn = shared.CodexActiveTurn;
 type CodexPendingApprovalRequest = shared.CodexPendingApprovalRequest;
+type CodexPendingUserInputRequest = shared.CodexPendingUserInputRequest;
 type CodexQueuedNotification = shared.CodexQueuedNotification;
 type CodexRpcPendingRequest = shared.CodexRpcPendingRequest;
 type CodexRpcRequestId = shared.CodexRpcRequestId;
@@ -62,6 +63,7 @@ const {
   buildCliEnvironment,
   buildCodexApprovalRequest,
   buildCodexCliArgs,
+  buildCodexUserInputRequest,
   coerceWebSocketMessageData,
   delay,
   describeUnknownError,
@@ -116,10 +118,11 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   private interruptPendingTurnStart = false;
   private pendingThreadFollowId: string | null = null;
   private pendingApprovalRequest: CodexPendingApprovalRequest | null = null;
+  private pendingUserInputRequest: CodexPendingUserInputRequest | null = null;
   private queuedTurnNotifications: CodexQueuedNotification[] = [];
   private queuedTurnServerRequests: Array<{
     requestId: CodexRpcRequestId;
-    method: CodexPendingApprovalRequest["method"];
+    method: CodexPendingApprovalRequest["method"] | CodexPendingUserInputRequest["method"];
     params: Record<string, unknown>;
   }> = [];
   private mirroredUserInputTurnIds = new Set<string>();
@@ -202,6 +205,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     return buildCodexCliArgs(`ws://${CODEX_APP_SERVER_HOST}:${this.appServerPort}`, {
       inlineMode: this.options.renderMode !== "panel",
       profile: this.options.profile,
+      extraCliArgs: this.options.extraCliArgs,
     });
   }
 

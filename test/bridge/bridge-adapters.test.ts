@@ -787,6 +787,33 @@ describe("buildCodexCliArgs", () => {
       "--no-alt-screen",
     ]);
   });
+
+  test("appends extra codex CLI args after bridge-managed args", () => {
+    expect(
+      buildCodexCliArgs("ws://127.0.0.1:8123", {
+        profile: "wechat",
+        extraCliArgs: ["--yolo", "--model", "gpt-5.2"],
+      }),
+    ).toEqual([
+      "--enable",
+      "tui_app_server",
+      "--remote",
+      "ws://127.0.0.1:8123",
+      "--profile",
+      "wechat",
+      "--yolo",
+      "--model",
+      "gpt-5.2",
+    ]);
+  });
+
+  test("rejects extra codex args that would override the bridge remote", () => {
+    expect(() =>
+      buildCodexCliArgs("ws://127.0.0.1:8123", {
+        extraCliArgs: ["--remote=ws://127.0.0.1:9999"],
+      }),
+    ).toThrow(/--remote/);
+  });
 });
 
 describe("Claude CLI compatibility", () => {
@@ -823,6 +850,24 @@ describe("Claude CLI compatibility", () => {
         includeNoAltScreen: true,
       }),
     ).toEqual(["--no-alt-screen", "--settings", "/tmp/claude-settings.json"]);
+  });
+
+  test("appends extra Claude CLI args after bridge-managed settings", () => {
+    expect(
+      buildClaudeCliArgs({
+        settingsFilePath: "/tmp/claude-settings.json",
+        extraCliArgs: ["--debug"],
+      }),
+    ).toEqual(["--settings", "/tmp/claude-settings.json", "--debug"]);
+  });
+
+  test("rejects extra Claude args that would override bridge settings", () => {
+    expect(() =>
+      buildClaudeCliArgs({
+        settingsFilePath: "/tmp/claude-settings.json",
+        extraCliArgs: ["--settings", "/tmp/other-settings.json"],
+      }),
+    ).toThrow(/--settings/);
   });
 
   test("recognizes Claude invalid resume errors", () => {

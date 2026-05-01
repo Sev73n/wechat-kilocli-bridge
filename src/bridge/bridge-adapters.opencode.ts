@@ -441,6 +441,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     return true;
   }
 
+  async submitUserInput(_answers: Record<string, string[]>): Promise<boolean> {
+    return false;
+  }
+
   async dispose(): Promise<void> {
     this.shuttingDown = true;
     this.clearWechatWorkingNotice(true);
@@ -615,6 +619,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     if (sessionId && (await this.hasSession(sessionId))) {
       args.push("--session", sessionId);
     }
+    args.push(...(this.options.extraCliArgs ?? []));
     return args;
   }
 

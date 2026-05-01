@@ -41,6 +41,10 @@ export class LegacyAdapterRuntime implements RuntimeHost {
     return await this.adapter.resolveApproval(action);
   }
 
+  async submitUserInput(answers: Record<string, string[]>): Promise<boolean> {
+    return await this.adapter.submitUserInput(answers);
+  }
+
   async dispose(): Promise<void> {
     await this.adapter.dispose();
   }
