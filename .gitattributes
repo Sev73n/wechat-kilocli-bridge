@@ -1,2 +1,36 @@
-# Auto detect text files and perform LF normalization
+# Auto-detect text files, then pin formats that must not drift.
 * text=auto
+
+# Published Node CLI entrypoints need stable LF shebang scripts on every platform.
+bin/*.mjs text eol=lf
+.gitattributes text eol=lf
+.gitignore text eol=lf
+
+# Native Windows command wrappers should keep CRLF when they are added.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary assets must never be line-ending normalized.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.pdf binary
+*.zip binary
+*.gz binary
+*.7z binary
+*.tar binary
+*.exe binary
+*.dll binary
+*.node binary
+*.wasm binary
+*.mp3 binary
+*.mp4 binary
+*.wav binary
+*.pptx binary
+*.docx binary
+*.xlsx binary
+bun.lockb binary
