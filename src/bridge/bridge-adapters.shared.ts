@@ -1291,6 +1291,20 @@ export function getCodexSessionSource(meta: CodexSessionMeta | null | undefined)
   return null;
 }
 
+export function isTrustedCodexFallbackSession(meta: CodexSessionMeta | null | undefined): boolean {
+  const sessionSource = getCodexSessionSource(meta);
+  if (!sessionSource) {
+    return false;
+  }
+
+  if (sessionSource === "cli") {
+    return true;
+  }
+
+  const originator = normalizeOutput(meta?.originator ?? "").trim().toLowerCase();
+  return sessionSource === "vscode" && originator === "wechat-bridge";
+}
+
 export function parseCodexSessionUserMessage(line: string): string | null {
   const trimmed = line.trim();
   if (!trimmed) {
@@ -1510,6 +1524,10 @@ export function findRecentCodexSessionFileForCwd(
   for (const filePath of listCodexSessionFilesRecursively(sessionsRoot)) {
     const meta = readCodexSessionMeta(filePath);
     if (!meta?.id || !meta.cwd || normalizeComparablePath(meta.cwd) !== currentCwd) {
+      continue;
+    }
+
+    if (!isTrustedCodexFallbackSession(meta)) {
       continue;
     }
 

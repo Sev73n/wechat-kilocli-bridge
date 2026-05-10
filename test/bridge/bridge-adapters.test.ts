@@ -1902,6 +1902,101 @@ describe("findRecentCodexSessionFileForCwd", () => {
     expect(recent?.threadId).toBe("thread_historical_123");
     expect(recent?.filePath).toBe(sessionFilePath);
   });
+
+  test("only accepts trusted CLI or wechat-bridge vscode sessions for recent fallback", () => {
+    const homeDirectory = makeTempDirectory();
+    process.env.HOME = homeDirectory;
+    process.env.USERPROFILE = homeDirectory;
+
+    const cwd = "C:\\repo";
+    const desktopSessionPath = path.join(
+      homeDirectory,
+      ".codex",
+      "sessions",
+      "2026",
+      "03",
+      "23",
+      "desktop-thread.jsonl",
+    );
+    const bridgeSessionPath = path.join(
+      homeDirectory,
+      ".codex",
+      "sessions",
+      "2026",
+      "03",
+      "23",
+      "bridge-thread.jsonl",
+    );
+    const foreignVscodeSessionPath = path.join(
+      homeDirectory,
+      ".codex",
+      "sessions",
+      "2026",
+      "03",
+      "23",
+      "foreign-vscode-thread.jsonl",
+    );
+
+    writeTextFile(
+      desktopSessionPath,
+      [
+        JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: "thread_desktop",
+            cwd,
+            source: "vscode",
+            originator: "Codex Desktop",
+            timestamp: "2026-03-23T12:00:00.000Z",
+          },
+        }),
+      ].join("\n"),
+    );
+    const desktopMtime = new Date("2026-03-23T12:00:08.000Z");
+    fs.utimesSync(desktopSessionPath, desktopMtime, desktopMtime);
+
+    writeTextFile(
+      foreignVscodeSessionPath,
+      [
+        JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: "thread_foreign_vscode",
+            cwd,
+            source: "vscode",
+            originator: "Some Other Integration",
+            timestamp: "2026-03-23T12:00:00.500Z",
+          },
+        }),
+      ].join("\n"),
+    );
+    const foreignMtime = new Date("2026-03-23T12:00:09.000Z");
+    fs.utimesSync(foreignVscodeSessionPath, foreignMtime, foreignMtime);
+
+    writeTextFile(
+      bridgeSessionPath,
+      [
+        JSON.stringify({
+          type: "session_meta",
+          payload: {
+            id: "thread_bridge",
+            cwd,
+            source: "vscode",
+            originator: "wechat-bridge",
+            timestamp: "2026-03-23T12:00:01.000Z",
+          },
+        }),
+      ].join("\n"),
+    );
+    const bridgeMtime = new Date("2026-03-23T12:00:05.000Z");
+    fs.utimesSync(bridgeSessionPath, bridgeMtime, bridgeMtime);
+
+    const recent = findRecentCodexSessionFileForCwd(cwd, Date.parse("2026-03-23T12:00:00.000Z"));
+
+    expect(recent).not.toBeNull();
+    expect(recent?.threadId).toBe("thread_bridge");
+    expect(recent?.filePath).toBe(bridgeSessionPath);
+  });
 });
 
 describe("extractCodexFinalTextFromItem", () => {
