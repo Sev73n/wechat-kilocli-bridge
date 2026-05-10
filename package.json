@@ -1,11 +1,11 @@
 {
   "name": "@unlinearity/cli-wechat-bridge",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "CLI WeChat Bridge for Codex, Claude Code, OpenCode, and PowerShell over WeChat",
   "type": "module",
   "files": [
     "bin/",
-    "src/",
+    "dist/",
     "README.md",
     "LICENSE.txt"
   ],
@@ -46,6 +46,9 @@
     "wechat-check-update": "bin/wechat-check-update.mjs"
   },
   "scripts": {
+    "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.build.json",
+    "prepack": "npm run build",
     "setup": "node --no-warnings --experimental-strip-types src/wechat/setup.ts",
     "start": "node --no-warnings --experimental-strip-types src/wechat/wechat-channel.ts",
     "check": "node --no-warnings --experimental-strip-types src/wechat/wechat-channel.ts --check",

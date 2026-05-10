@@ -1,5 +1,5 @@
 #!/usr/bin/env node
 
-import { runTsEntry } from "./_run-entry.mjs";
+import { runJsEntry } from "./_run-entry.mjs";
 
-runTsEntry("src/companion/codex-remote-client.ts");
+runJsEntry("dist/companion/codex-remote-client.js");

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
 
-import { runTsEntry } from "./_run-entry.mjs";
+import { runJsEntry } from "./_run-entry.mjs";
 
-runTsEntry("src/bridge/wechat-bridge.ts", ["--adapter", "opencode"]);
+runJsEntry("dist/bridge/wechat-bridge.js", ["--adapter", "opencode"]);

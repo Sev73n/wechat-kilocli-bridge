@@ -10,21 +10,20 @@ describe("OpenCode CLI entrypoints", () => {
   test("wechat-opencode launches the shared local companion in opencode mode", () => {
     const source = readRepoFile("bin/wechat-opencode.mjs");
 
-    expect(source).toContain('runTsEntry("src/companion/local-companion.ts", ["--adapter", "opencode"])');
+    expect(source).toContain('runJsEntry("dist/companion/local-companion.js", ["--adapter", "opencode"])');
     expect(source).not.toContain("opencode-panel.ts");
   });
 
   test("wechat-bridge-opencode stays a bridge-only entrypoint", () => {
     const source = readRepoFile("bin/wechat-bridge-opencode.mjs");
 
-    expect(source).toContain('runTsEntry("src/bridge/wechat-bridge.ts", ["--adapter", "opencode"])');
+    expect(source).toContain('runJsEntry("dist/bridge/wechat-bridge.js", ["--adapter", "opencode"])');
   });
 
   test("wechat-opencode-start keeps the bridge bootstrap flow", () => {
     const source = readRepoFile("bin/wechat-opencode-start.mjs");
 
-    expect(source).toContain('from "../src/companion/local-companion-start.ts"');
-    expect(source).toContain('await main(["--adapter", "opencode", ...process.argv.slice(2)])');
+    expect(source).toContain('runJsEntry("dist/companion/local-companion-start.js", ["--adapter", "opencode"])');
   });
 
   test("package scripts route opencode through the shared companion launcher", () => {

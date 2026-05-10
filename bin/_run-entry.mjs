@@ -7,17 +7,11 @@ import { fileURLToPath } from "node:url";
 const BIN_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_DIR = path.resolve(BIN_DIR, "..");
 
-export function runTsEntry(relativeEntryPath, extraArgs = []) {
+export function runJsEntry(relativeEntryPath, extraArgs = []) {
   const entryPath = path.join(PROJECT_DIR, relativeEntryPath);
   const child = spawn(
     process.execPath,
-    [
-      "--no-warnings",
-      "--experimental-strip-types",
-      entryPath,
-      ...extraArgs,
-      ...process.argv.slice(2),
-    ],
+    [entryPath, ...extraArgs, ...process.argv.slice(2)],
     {
       stdio: "inherit",
       cwd: process.cwd(),

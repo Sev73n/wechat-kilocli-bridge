@@ -125,24 +125,38 @@ export function buildClaudeHookSettings(command: string): Record<string, unknown
 }
 
 export function buildClaudeHookScript(params: ClaudeHookScriptParams): string {
+  const runtimeArgs = ["--no-warnings"];
+  if (params.hookEntryPath.endsWith(".ts")) {
+    runtimeArgs.push("--experimental-strip-types");
+  }
+  runtimeArgs.push(params.hookEntryPath);
+
   if (params.platform === "win32") {
+    const command = [
+      params.runtimeExecPath,
+      ...runtimeArgs,
+    ].map(quoteWindowsCommandArg).join(" ");
     return [
       "@echo off",
       "setlocal",
       `set "CLAUDE_WECHAT_HOOK_PORT=${params.hookPort}"`,
       `set "CLAUDE_WECHAT_HOOK_TOKEN=${params.hookToken}"`,
       // Claude reads hook decisions from stdout, so only stderr can be discarded here.
-      `${quoteWindowsCommandArg(params.runtimeExecPath)} --no-warnings --experimental-strip-types ${quoteWindowsCommandArg(params.hookEntryPath)} 2>nul`,
+      `${command} 2>nul`,
       "exit /b 0",
     ].join("\r\n");
   }
 
+  const command = [
+    params.runtimeExecPath,
+    ...runtimeArgs,
+  ].map(quotePosixCommandArg).join(" ");
   return [
     "#!/bin/sh",
     `export CLAUDE_WECHAT_HOOK_PORT=${quotePosixCommandArg(String(params.hookPort))}`,
     `export CLAUDE_WECHAT_HOOK_TOKEN=${quotePosixCommandArg(params.hookToken)}`,
     // Claude reads hook decisions from stdout, so only stderr can be discarded here.
-    `${quotePosixCommandArg(params.runtimeExecPath)} --no-warnings --experimental-strip-types ${quotePosixCommandArg(params.hookEntryPath)} 2>/dev/null || true`,
+    `${command} 2>/dev/null || true`,
     "exit 0",
   ].join("\n");
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
 
-import { main } from "../src/companion/local-companion-start.ts";
+import { runJsEntry } from "./_run-entry.mjs";
 
-await main(["--adapter", "claude", ...process.argv.slice(2)]);
+runJsEntry("dist/companion/local-companion-start.js", ["--adapter", "claude"]);

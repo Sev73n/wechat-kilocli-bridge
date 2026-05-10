@@ -72,7 +72,9 @@ type VisibleClientRunners = {
   localCompanion?: typeof runLocalCompanion;
 };
 
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
+const MODULE_FILE = fileURLToPath(import.meta.url);
+const MODULE_DIR = path.dirname(MODULE_FILE);
+const RUNTIME_ENTRY_EXTENSION = path.extname(MODULE_FILE) === ".ts" ? ".ts" : ".js";
 const DEFAULT_WAIT_TIMEOUT_MS = 15_000;
 const DEFAULT_ADAPTER: LocalCompanionLaunchAdapter = "codex";
 
@@ -343,9 +345,11 @@ export function buildBackgroundBridgeArgs(
   options: LocalCompanionStartCliOptions,
 ): string[] {
   const lifecycle = "companion_bound";
-  const args = [
-    "--no-warnings",
-    "--experimental-strip-types",
+  const args = ["--no-warnings"];
+  if (path.extname(entryPath) === ".ts") {
+    args.push("--experimental-strip-types");
+  }
+  args.push(
     entryPath,
     "--adapter",
     options.adapter,
@@ -353,7 +357,7 @@ export function buildBackgroundBridgeArgs(
     options.cwd,
     "--lifecycle",
     lifecycle,
-  ];
+  );
 
   if (options.profile) {
     args.push("--profile", options.profile);
@@ -363,7 +367,12 @@ export function buildBackgroundBridgeArgs(
 }
 
 function startBridgeInBackground(options: LocalCompanionStartCliOptions): void {
-  const entryPath = path.resolve(MODULE_DIR, "..", "bridge", "wechat-bridge.ts");
+  const entryPath = path.resolve(
+    MODULE_DIR,
+    "..",
+    "bridge",
+    `wechat-bridge${RUNTIME_ENTRY_EXTENSION}`,
+  );
   const args = buildBackgroundBridgeArgs(entryPath, options);
 
   const child = spawn(process.execPath, args, {

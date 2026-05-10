@@ -81,6 +81,19 @@ describe("buildClaudeHookScript", () => {
     expect(script).toContain("2>/dev/null || true");
     expect(script).not.toContain(">/dev/null 2>&1");
   });
+
+  test("runs compiled hook entries without TypeScript stripping", () => {
+    const script = buildClaudeHookScript({
+      platform: "linux",
+      runtimeExecPath: "/usr/local/bin/node",
+      hookEntryPath: "/repo/dist/bridge/claude-hook.js",
+      hookPort: 43123,
+      hookToken: "token-123",
+    });
+
+    expect(script).toContain("/repo/dist/bridge/claude-hook.js");
+    expect(script).not.toContain("--experimental-strip-types");
+  });
 });
 
 describe("buildClaudePermissionApprovalRequest", () => {

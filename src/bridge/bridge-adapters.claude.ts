@@ -445,7 +445,10 @@ export class ClaudeCompanionAdapter extends AbstractPtyAdapter {
       process.platform === "win32" ? "hook.cmd" : "hook.sh",
     );
     const settingsFilePath = path.join(runtimeDir, "settings.json");
-    const hookEntryPath = path.join(MODULE_DIR, "claude-hook.ts");
+    const sourceHookEntryPath = path.join(MODULE_DIR, "claude-hook.ts");
+    const hookEntryPath = fs.existsSync(sourceHookEntryPath)
+      ? sourceHookEntryPath
+      : path.join(MODULE_DIR, "claude-hook.js");
 
     fs.writeFileSync(
       hookScriptPath,

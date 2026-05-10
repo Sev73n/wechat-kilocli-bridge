@@ -112,6 +112,25 @@ describe("local-companion-start helpers", () => {
     ]);
   });
 
+  test("buildBackgroundBridgeArgs runs compiled bridge entries without TypeScript stripping", () => {
+    const args = buildBackgroundBridgeArgs("/tmp/dist/bridge/wechat-bridge.js", {
+      adapter: "codex",
+      cwd: path.resolve("./tmp/project"),
+      timeoutMs: 15000,
+    });
+
+    expect(args).toEqual([
+      "--no-warnings",
+      "/tmp/dist/bridge/wechat-bridge.js",
+      "--adapter",
+      "codex",
+      "--cwd",
+      path.resolve("./tmp/project"),
+      "--lifecycle",
+      "companion_bound",
+    ]);
+  });
+
   test("runVisibleClient routes codex through the in-process remote client", async () => {
     const calls: Array<{ cwd: string }> = [];
     const exitCode = await runVisibleClient(
