@@ -183,11 +183,26 @@ describe("wechat inbound prompt injection", () => {
 
   test("injects attachment guidance for short follow-up send commands", () => {
     expect(shouldInjectWechatAttachmentPrompt("发送微信")).toBe(true);
+    expect(shouldInjectWechatAttachmentPrompt("发呀")).toBe(true);
     expect(buildWechatInboundPrompt("直接发给我")).toContain("```wechat-attachments");
+  });
+
+  test("injects attachment guidance for common Chinese send-file phrasing", () => {
+    const requests = [
+      "你随便给我发一个桌面上的PDF给我呗",
+      "帮我把桌面的PDF发过来，我要毕业设计相关的",
+      "给我发一个 C:\\Users\\unlin\\Desktop\\a.pdf",
+    ];
+
+    for (const request of requests) {
+      expect(shouldInjectWechatAttachmentPrompt(request)).toBe(true);
+      expect(buildWechatInboundPrompt(request)).toContain("```wechat-attachments");
+    }
   });
 
   test("skips prompt injection for ordinary non-send requests and existing protocol blocks", () => {
     const ordinary = "帮我总结一下这份强化学习资料。";
+    const nonSendWithChineseFa = "帮我发现这份桌面资料里的问题。";
     const explicitProtocol = [
       "直接发送。",
       "```wechat-attachments",
@@ -196,6 +211,7 @@ describe("wechat inbound prompt injection", () => {
     ].join("\n");
 
     expect(shouldInjectWechatAttachmentPrompt(ordinary)).toBe(false);
+    expect(shouldInjectWechatAttachmentPrompt(nonSendWithChineseFa)).toBe(false);
     expect(buildWechatInboundPrompt(ordinary)).toBe(ordinary);
     expect(buildWechatInboundPrompt(explicitProtocol)).toBe(explicitProtocol);
   });

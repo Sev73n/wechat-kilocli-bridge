@@ -34,7 +34,9 @@ export const MESSAGE_START_GRACE_MS = 5_000;
 const WECHAT_ATTACHMENT_SEND_INTENT_RE =
   /\b(send|upload|attach|forward|share)\b/i;
 const WECHAT_ATTACHMENT_SEND_INTENT_ZH_RE =
-  /发送|发给我|发我|发到|上传|转发|分享/;
+  /发送|发给我|发我|给我发|发过来|发一下|发来|发到|发微信|上传|转发|分享|传给我|传我|传到/;
+const WECHAT_ATTACHMENT_SHORT_SEND_ZH_RE =
+  /^(?:发|发呀|发呢|发吧|直接发|发给我|发我|发微信|发送微信)$/;
 const WECHAT_ATTACHMENT_TARGET_RE = /\bwechat\b/i;
 const WECHAT_ATTACHMENT_TARGET_ZH_RE = /微信/;
 const WECHAT_ATTACHMENT_FILE_TERM_RE =
@@ -42,7 +44,7 @@ const WECHAT_ATTACHMENT_FILE_TERM_RE =
 const WECHAT_ATTACHMENT_FILE_TERM_ZH_RE =
   /文件|附件|文档|压缩包|图片|照片|截图|音频|语音|视频|pdf|PDF/;
 const LOCAL_ATTACHMENT_PATH_HINT_RE =
-  /(?:[A-Za-z]:\\|(?:~[\\/])?(?:Desktop|Documents|Downloads|Pictures|Videos|Music)[\\/])/i;
+  /(?:[A-Za-z]:\\|(?:~[\\/])?(?:Desktop|Documents|Downloads|Pictures|Videos|Music)[\\/]|桌面|下载目录|下载文件夹)/i;
 const WECHAT_ATTACHMENT_PROMPT_PREFIX = [
   "[WeChat bridge note]",
   "Your final reply will be forwarded back to a WeChat chat.",
@@ -278,7 +280,8 @@ export function shouldInjectWechatAttachmentPrompt(text: string): boolean {
 
   const mentionsSendIntent =
     WECHAT_ATTACHMENT_SEND_INTENT_RE.test(normalized) ||
-    WECHAT_ATTACHMENT_SEND_INTENT_ZH_RE.test(normalized);
+    WECHAT_ATTACHMENT_SEND_INTENT_ZH_RE.test(normalized) ||
+    WECHAT_ATTACHMENT_SHORT_SEND_ZH_RE.test(normalized);
   if (!mentionsSendIntent) {
     return false;
   }
