@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   buildBackgroundBridgeArgs,
   decideLaunchAction,
+  ensureCompanionStartWechatCredentials,
   formatAlreadyActiveMessage,
   formatRestartUnhealthyMessage,
   formatSwitchFailureMessage,
@@ -156,6 +157,37 @@ describe("local-companion-start helpers", () => {
       {
         cwd: path.resolve("./tmp/project"),
         cliArgs: ["--yolo"],
+      },
+    ]);
+  });
+
+  test("starter checks WeChat credentials in the foreground before opening the client", async () => {
+    const calls: Array<{
+      requireUserId?: boolean;
+      validateExisting?: boolean;
+      logType: string;
+    }> = [];
+
+    await ensureCompanionStartWechatCredentials("codex", async (options) => {
+      calls.push({
+        requireUserId: options.requireUserId,
+        validateExisting: options.validateExisting,
+        logType: typeof options.log,
+      });
+      return {
+        token: "token-1",
+        baseUrl: "https://ilinkai.weixin.qq.com",
+        accountId: "bot-1",
+        userId: "owner@im.wechat",
+        savedAt: "2026-05-10T00:00:00.000Z",
+      };
+    });
+
+    expect(calls).toEqual([
+      {
+        requireUserId: true,
+        validateExisting: true,
+        logType: "function",
       },
     ]);
   });
@@ -322,6 +354,32 @@ describe("local-companion-start helpers", () => {
     expect(decision).toEqual({
       kind: "open_companion",
       message: "Found running bridge for D:/work/project. Opening companion...",
+    });
+  });
+
+  test("same workspace with no reachable endpoint requests auto-heal restart", () => {
+    const decision = decideLaunchAction({
+      requestedAdapter: "codex",
+      requestedCwd: "D:/work/project",
+      runningLock: {
+        pid: 123,
+        parentPid: 321,
+        instanceId: "bridge-1",
+        adapter: "codex",
+        command: "codex",
+        cwd: "D:/work/project",
+        startedAt: "2026-03-28T00:00:00.000Z",
+        lifecycle: "persistent",
+      },
+      lockShouldAutoReclaim: false,
+      endpoint: null,
+      endpointIsReachable: false,
+      companionIsAlive: false,
+    });
+
+    expect(decision).toEqual({
+      kind: "restart_unhealthy",
+      message: formatRestartUnhealthyMessage("D:/work/project"),
     });
   });
 

@@ -1,16 +1,12 @@
 #!/usr/bin/env node
 
-import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import {
-  BRIDGE_LOG_FILE,
-  CREDENTIALS_FILE,
-  migrateLegacyChannelFiles,
-} from "../wechat/channel-config.ts";
+import { BRIDGE_LOG_FILE } from "../wechat/channel-config.ts";
+import { ensureWechatCredentials } from "../wechat/setup.ts";
 import {
   readBridgeLockFile,
   shouldAutoReclaimBridgeLock,
@@ -72,6 +68,8 @@ type VisibleClientRunners = {
   localCompanion?: typeof runLocalCompanion;
 };
 
+type EnsureWechatCredentialsFn = typeof ensureWechatCredentials;
+
 const MODULE_FILE = fileURLToPath(import.meta.url);
 const MODULE_DIR = path.dirname(MODULE_FILE);
 const RUNTIME_ENTRY_EXTENSION = path.extname(MODULE_FILE) === ".ts" ? ".ts" : ".js";
@@ -131,9 +129,14 @@ export function decideLaunchAction(
     };
   }
 
+  if (!input.endpoint || !input.endpointIsReachable) {
+    return {
+      kind: "restart_unhealthy",
+      message: formatRestartUnhealthyMessage(input.requestedCwd),
+    };
+  }
+
   if (
-    input.endpoint &&
-    input.endpointIsReachable &&
     input.companionIsAlive &&
     (input.endpoint.companionStatus === "stopped" ||
       input.endpoint.companionStatus === "error")
@@ -489,15 +492,22 @@ export async function runVisibleClient(
   });
 }
 
+export async function ensureCompanionStartWechatCredentials(
+  adapter: LocalCompanionLaunchAdapter,
+  ensureCredentials: EnsureWechatCredentialsFn = ensureWechatCredentials,
+): Promise<void> {
+  await ensureCredentials({
+    requireUserId: true,
+    validateExisting: true,
+    log: (message) => log(adapter, message),
+  });
+}
+
 export async function runLocalCompanionStart(
   argv: string[] = process.argv.slice(2),
 ): Promise<number> {
   const options = parseCliArgs(argv);
-  migrateLegacyChannelFiles((message) => log(options.adapter, message));
-
-  if (!fs.existsSync(CREDENTIALS_FILE)) {
-    throw new Error(`Missing WeChat credentials. Run "bun run setup" first. (${CREDENTIALS_FILE})`);
-  }
+  await ensureCompanionStartWechatCredentials(options.adapter);
 
   const ready = await ensureBridgeReady(options);
   if (!ready.shouldOpenVisibleClient) {

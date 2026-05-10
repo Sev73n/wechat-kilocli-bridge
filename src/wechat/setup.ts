@@ -2,20 +2,26 @@
 /**
  * CLI WeChat Bridge setup.
  *
- * Run this before starting CLI WeChat Bridge:
+ * Installed bridge commands run this automatically on first use.
+ * To force a relogin manually:
  *   bun run setup
+ *   wechat-setup
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import readline from "node:readline";
 
 import {
   BOT_TYPE,
+  CONTEXT_CACHE_FILE,
   CREDENTIALS_FILE,
   DEFAULT_BASE_URL,
   ensureChannelDataDir,
   migrateLegacyChannelFiles,
+  SYNC_BUF_FILE,
 } from "./channel-config.ts";
+import { isWechatSyncSessionTimeout } from "./wechat-transport.ts";
 
 interface QRCodeResponse {
   qrcode: string;
@@ -30,7 +36,7 @@ interface QRStatusResponse {
   ilink_user_id?: string;
 }
 
-type StoredAccount = {
+export type StoredAccount = {
   token: string;
   baseUrl: string;
   accountId: string;
@@ -38,7 +44,24 @@ type StoredAccount = {
   savedAt: string;
 };
 
-function loadExistingCredentials(): StoredAccount | null {
+type WechatLoginOptions = {
+  baseUrl?: string;
+  requireUserId?: boolean;
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  log?: (message: string) => void;
+  write?: (message: string) => void;
+};
+
+type EnsureWechatCredentialsOptions = WechatLoginOptions & {
+  login?: () => Promise<StoredAccount>;
+  validateExisting?: boolean;
+  validationTimeoutMs?: number;
+};
+
+const CHANNEL_VERSION = "0.3.0";
+
+export function loadExistingCredentials(): StoredAccount | null {
   try {
     if (!fs.existsSync(CREDENTIALS_FILE)) {
       return null;
@@ -47,6 +70,83 @@ function loadExistingCredentials(): StoredAccount | null {
   } catch {
     return null;
   }
+}
+
+export function getWechatLoginRequiredReason(
+  account: StoredAccount | null,
+  options: {
+    requireUserId?: boolean;
+  } = {},
+): string | null {
+  if (!account) {
+    return "No saved WeChat credentials found.";
+  }
+  if (options.requireUserId && !account.userId) {
+    return "Saved WeChat credentials are missing userId.";
+  }
+  return null;
+}
+
+function randomWechatUin(): string {
+  const uint32 = crypto.randomBytes(4).readUInt32BE(0);
+  return Buffer.from(String(uint32), "utf-8").toString("base64");
+}
+
+export async function getStoredCredentialsInvalidReason(
+  account: StoredAccount,
+  options: {
+    timeoutMs?: number;
+  } = {},
+): Promise<string | null> {
+  const baseUrl = account.baseUrl || DEFAULT_BASE_URL;
+  const base = baseUrl.endsWith("/") ? baseUrl : `${baseUrl}/`;
+  const url = `${base}ilink/bot/getupdates`;
+  const body = JSON.stringify({
+    get_updates_buf: "",
+    base_info: { channel_version: CHANNEL_VERSION },
+  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? 5_000);
+
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": String(Buffer.byteLength(body, "utf-8")),
+        AuthorizationType: "ilink_bot_token",
+        Authorization: `Bearer ${account.token}`,
+        "X-WECHAT-UIN": randomWechatUin(),
+      },
+      body,
+      signal: controller.signal,
+    });
+
+    const text = await res.text();
+    if (res.status === 401 || res.status === 403) {
+      return "Saved WeChat credentials were rejected by the server.";
+    }
+    if (!res.ok) {
+      return null;
+    }
+
+    const response = JSON.parse(text) as {
+      errcode?: number;
+      errmsg?: string;
+    };
+    if (isWechatSyncSessionTimeout(response)) {
+      return "Saved WeChat login has expired.";
+    }
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      return null;
+    }
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+
+  return null;
 }
 
 async function fetchQRCode(baseUrl: string): Promise<QRCodeResponse> {
@@ -103,18 +203,150 @@ async function askYesNo(prompt: string): Promise<boolean> {
   }
 }
 
-async function printQRCode(qrContent: string): Promise<void> {
+async function printQRCode(
+  qrContent: string,
+  write: (message: string) => void,
+): Promise<void> {
   try {
     const qrterm = await import("qrcode-terminal");
     await new Promise<void>((resolve) => {
       qrterm.default.generate(qrContent, { small: true }, (qr: string) => {
-        console.log(qr);
+        write(`${qr}\n`);
         resolve();
       });
     });
   } catch {
-    console.log(`Open this QR code URL in a browser: ${qrContent}\n`);
+    write(`Open this QR code URL in a browser: ${qrContent}\n\n`);
   }
+}
+
+function saveCredentials(account: StoredAccount): void {
+  ensureChannelDataDir();
+  fs.writeFileSync(CREDENTIALS_FILE, JSON.stringify(account, null, 2), "utf-8");
+  for (const staleStateFile of [SYNC_BUF_FILE, CONTEXT_CACHE_FILE]) {
+    try {
+      fs.rmSync(staleStateFile, { force: true });
+    } catch {
+      // Best effort cleanup.
+    }
+  }
+  try {
+    fs.chmodSync(CREDENTIALS_FILE, 0o600);
+  } catch {
+    // Best effort on Windows.
+  }
+}
+
+function printPostLoginHelp(log: (message: string) => void): void {
+  log("No /pair step is required.");
+  log("The logged-in WeChat account above becomes the only authorized bridge owner.");
+  log("");
+  log("Start from any project directory with one of:");
+  log("  wechat-codex-start");
+  log("  wechat-claude-start");
+  log("  wechat-opencode-start");
+  log("  wechat-bridge-shell");
+  log("");
+  log("Manual two-terminal mode is also available:");
+  log("  wechat-bridge-codex  +  wechat-codex");
+  log("  wechat-bridge-claude +  wechat-claude");
+  log("  wechat-bridge-opencode + wechat-opencode");
+}
+
+export async function runWechatLogin(
+  options: WechatLoginOptions = {},
+): Promise<StoredAccount> {
+  const baseUrl = options.baseUrl ?? DEFAULT_BASE_URL;
+  const log = options.log ?? ((message: string) => console.log(message));
+  const write = options.write ?? ((message: string) => process.stdout.write(message));
+  const timeoutMs = options.timeoutMs ?? 480_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 1_000;
+
+  log("Fetching WeChat login QR code...\n");
+  const qrResp = await fetchQRCode(baseUrl);
+  await printQRCode(qrResp.qrcode_img_content, write);
+
+  log("Scan the QR code above with WeChat, then confirm the login on your phone.\n");
+
+  const deadline = Date.now() + timeoutMs;
+  let scannedPrinted = false;
+
+  while (Date.now() < deadline) {
+    const status = await pollQRStatus(baseUrl, qrResp.qrcode);
+
+    switch (status.status) {
+      case "wait":
+        write(".");
+        break;
+      case "scaned":
+        if (!scannedPrinted) {
+          log("\nQR code scanned. Confirm the login in WeChat...");
+          scannedPrinted = true;
+        }
+        break;
+      case "expired":
+        throw new Error("The QR code expired. Run setup again.");
+      case "confirmed": {
+        if (!status.ilink_bot_id || !status.bot_token) {
+          throw new Error("Login failed: missing bot credentials from server.");
+        }
+        if (options.requireUserId && !status.ilink_user_id) {
+          throw new Error("Login failed: missing WeChat userId from server.");
+        }
+
+        const account: StoredAccount = {
+          token: status.bot_token,
+          baseUrl: status.baseurl || baseUrl,
+          accountId: status.ilink_bot_id,
+          userId: status.ilink_user_id,
+          savedAt: new Date().toISOString(),
+        };
+
+        saveCredentials(account);
+
+        log("\nWeChat login completed.");
+        log(`Account ID: ${account.accountId}`);
+        log(`User ID: ${account.userId ?? "(unknown)"}`);
+        log(`Credentials saved to: ${CREDENTIALS_FILE}`);
+        log("");
+        return account;
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+
+  throw new Error("Login timed out. Run setup again.");
+}
+
+export async function ensureWechatCredentials(
+  options: EnsureWechatCredentialsOptions = {},
+): Promise<StoredAccount> {
+  const log = options.log ?? ((message: string) => console.log(message));
+  migrateLegacyChannelFiles(log);
+
+  const existing = loadExistingCredentials();
+  const loginReason = getWechatLoginRequiredReason(existing, {
+    requireUserId: options.requireUserId,
+  });
+  if (!loginReason) {
+    const account = existing as StoredAccount;
+    if (options.validateExisting) {
+      const invalidReason = await getStoredCredentialsInvalidReason(account, {
+        timeoutMs: options.validationTimeoutMs,
+      });
+      if (invalidReason) {
+        log(`${invalidReason} Starting WeChat login...`);
+        const login = options.login ?? (() => runWechatLogin(options));
+        return login();
+      }
+    }
+    return account;
+  }
+
+  log(`${loginReason} Starting WeChat login...`);
+  const login = options.login ?? (() => runWechatLogin(options));
+  return login();
 }
 
 async function main() {
@@ -134,99 +366,15 @@ async function main() {
     }
   }
 
-  console.log("Fetching WeChat login QR code...\n");
-  const qrResp = await fetchQRCode(DEFAULT_BASE_URL);
-  await printQRCode(qrResp.qrcode_img_content);
-
-  console.log("Scan the QR code in WeChat, then confirm on your phone.\n");
-
-  const deadline = Date.now() + 480_000;
-  let scannedPrinted = false;
-
-  while (Date.now() < deadline) {
-    const status = await pollQRStatus(DEFAULT_BASE_URL, qrResp.qrcode);
-
-    switch (status.status) {
-      case "wait":
-        process.stdout.write(".");
-        break;
-      case "scaned":
-        if (!scannedPrinted) {
-          console.log("\nQR code scanned. Confirm the login in WeChat...");
-          scannedPrinted = true;
-        }
-        break;
-      case "expired":
-        console.log("\nThe QR code expired. Run setup again.");
-        process.exit(1);
-        break;
-      case "confirmed": {
-        if (!status.ilink_bot_id || !status.bot_token) {
-          console.error("\nLogin failed: missing bot credentials from server.");
-          process.exit(1);
-        }
-
-        const account: StoredAccount = {
-          token: status.bot_token,
-          baseUrl: status.baseurl || DEFAULT_BASE_URL,
-          accountId: status.ilink_bot_id,
-          userId: status.ilink_user_id,
-          savedAt: new Date().toISOString(),
-        };
-
-        ensureChannelDataDir();
-        fs.writeFileSync(CREDENTIALS_FILE, JSON.stringify(account, null, 2), "utf-8");
-        try {
-          fs.chmodSync(CREDENTIALS_FILE, 0o600);
-        } catch {
-          // Best effort on Windows.
-        }
-
-        console.log("\nWeChat login completed.");
-        console.log(`Account ID: ${account.accountId}`);
-        console.log(`User ID: ${account.userId ?? "(unknown)"}`);
-        console.log(`Credentials saved to: ${CREDENTIALS_FILE}`);
-        console.log();
-        console.log("No /pair step is required.");
-        console.log("The logged-in WeChat account above becomes the only authorized bridge owner.");
-        console.log();
-        console.log("After installing the package globally (for example: npm install -g . or npm link),");
-        console.log("start the WeChat bridge from any directory with:");
-        console.log("  wechat-bridge-codex");
-        console.log("  wechat-codex         # start this in a second terminal in the same directory");
-        console.log("  wechat-bridge-opencode");
-        console.log("  wechat-opencode      # start this in a second terminal in the same directory");
-        console.log("  wechat-bridge-claude");
-        console.log("  wechat-claude        # start this in a second terminal in the same directory");
-        console.log("  wechat-bridge-shell");
-        console.log("  On Linux/macOS, wechat-bridge-shell defaults to pwsh, then bash, zsh, or sh.");
-        console.log("  Shell mode is a headless remote executor for non-interactive commands and scripts.");
-        console.log();
-        console.log("Repo-local development entrypoints are still available:");
-        console.log("  bun run bridge:codex");
-        console.log("  bun run codex:panel");
-        console.log("  bun run bridge:opencode");
-        console.log("  bun run opencode:panel");
-        console.log("  bun run opencode:start");
-        console.log("  bun run bridge:claude");
-        console.log("  bun run claude:companion");
-        console.log("  bun run bridge:shell");
-        console.log();
-        console.log("Legacy MCP server entrypoint:");
-        console.log("  bun run start");
-        return;
-      }
-    }
-
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-  }
-
-  console.log("\nLogin timed out. Run setup again.");
-  process.exit(1);
+  await runWechatLogin({ requireUserId: true });
+  printPostLoginHelp((message) => console.log(message));
 }
 
-main().catch((err) => {
-  const message = err instanceof Error ? err.message : String(err);
-  console.error(`Error: ${message}`);
-  process.exit(1);
-});
+const isDirectRun = Boolean((import.meta as ImportMeta & { main?: boolean }).main);
+if (isDirectRun) {
+  main().catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Error: ${message}`);
+    process.exit(1);
+  });
+}

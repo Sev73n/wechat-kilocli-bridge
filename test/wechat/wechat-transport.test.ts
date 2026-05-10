@@ -10,6 +10,7 @@ import {
   classifyWechatTransportError,
   describeWechatTransportError,
   formatByteSize,
+  isWechatSyncSessionTimeout,
   resolveMediaUploadLimitBytes,
   tryClaimInboundMessage,
 } from "../../src/wechat/wechat-transport.ts";
@@ -83,6 +84,32 @@ describe("wechat upload limits", () => {
       retryable: false,
       statusCode: 401,
     });
+  });
+
+  test("treats WeChat session timeout as fatal auth instead of retryable network", () => {
+    expect(
+      classifyWechatTransportError(
+        new Error('WeChat session timed out. Run "wechat-setup" to log in again.'),
+      ),
+    ).toEqual({
+      kind: "auth",
+      retryable: false,
+    });
+  });
+
+  test("detects expired WeChat sync sessions from app-level responses", () => {
+    expect(
+      isWechatSyncSessionTimeout({
+        errcode: -14,
+        errmsg: "session timeout",
+      }),
+    ).toBe(true);
+    expect(
+      isWechatSyncSessionTimeout({
+        errcode: -14,
+        errmsg: "other failure",
+      }),
+    ).toBe(false);
   });
 
   test("claims each inbound message key only once across processes", () => {

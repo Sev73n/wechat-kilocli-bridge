@@ -104,10 +104,34 @@ export function ensureWorkspaceChannelDir(cwd: string): WorkspaceChannelPaths {
   return paths;
 }
 
+function channelDataDirHasState(): boolean {
+  try {
+    if (!fs.existsSync(CHANNEL_DATA_DIR)) {
+      return false;
+    }
+    return fs.readdirSync(CHANNEL_DATA_DIR).length > 0;
+  } catch {
+    return true;
+  }
+}
+
+export function shouldMigrateLegacyCredentials(params: {
+  channelDataDirHadState: boolean;
+  credentialsExists: boolean;
+  legacyCredentialsExists: boolean;
+}): boolean {
+  return (
+    params.legacyCredentialsExists &&
+    !params.credentialsExists &&
+    !params.channelDataDirHadState
+  );
+}
+
 export function migrateLegacyChannelFiles(
   log?: (message: string) => void,
 ): string[] {
   const migrated: string[] = [];
+  const channelDataDirHadState = channelDataDirHasState();
 
   if (
     !fs.existsSync(LEGACY_CREDENTIALS_FILE) &&
@@ -118,16 +142,16 @@ export function migrateLegacyChannelFiles(
 
   ensureChannelDataDir();
 
-  const copyIfNeeded = (fromPath: string, toPath: string, label: string) => {
-    if (!fs.existsSync(fromPath) || fs.existsSync(toPath)) {
-      return;
-    }
-    fs.copyFileSync(fromPath, toPath);
-    migrated.push(label);
-  };
-
-  copyIfNeeded(LEGACY_CREDENTIALS_FILE, CREDENTIALS_FILE, "credentials");
-  copyIfNeeded(LEGACY_SYNC_BUF_FILE, SYNC_BUF_FILE, "sync state");
+  if (
+    shouldMigrateLegacyCredentials({
+      channelDataDirHadState,
+      credentialsExists: fs.existsSync(CREDENTIALS_FILE),
+      legacyCredentialsExists: fs.existsSync(LEGACY_CREDENTIALS_FILE),
+    })
+  ) {
+    fs.copyFileSync(LEGACY_CREDENTIALS_FILE, CREDENTIALS_FILE);
+    migrated.push("credentials");
+  }
 
   if (migrated.length && log) {
     log(

@@ -22,6 +22,7 @@ const SEND_TIMEOUT_MS = 15_000;
 const CDN_MAX_RETRIES = 3;
 const ERROR_CAUSE_DEPTH_LIMIT = 4;
 const INBOUND_MESSAGE_CLAIM_TTL_MS = 10 * 60 * 1000;
+const SYNC_SESSION_TIMEOUT_ERRCODE = -14;
 
 const MSG_TYPE_USER = 1;
 const MSG_TYPE_BOT = 2;
@@ -83,6 +84,16 @@ interface GetUpdatesResp {
   errmsg?: string;
   msgs?: WeixinMessage[];
   get_updates_buf?: string;
+}
+
+export function isWechatSyncSessionTimeout(response: {
+  errcode?: number;
+  errmsg?: string;
+}): boolean {
+  return (
+    response.errcode === SYNC_SESSION_TIMEOUT_ERRCODE &&
+    /session timeout/i.test(response.errmsg ?? "")
+  );
 }
 
 export type InboundWechatMessage = {
@@ -365,6 +376,13 @@ export function classifyWechatTransportError(
   error: unknown,
 ): WechatTransportErrorClassification {
   if (error instanceof Error) {
+    if (
+      /WeChat session timed out/i.test(error.message) ||
+      /errcode=-14\b.*session timeout/i.test(error.message)
+    ) {
+      return { kind: "auth", retryable: false };
+    }
+
     if (error.name === "AbortError") {
       return { kind: "timeout", retryable: true };
     }
@@ -820,7 +838,19 @@ export class WeChatTransport {
     const timeoutMs = options.timeoutMs ?? DEFAULT_LONG_POLL_TIMEOUT_MS;
     const account = this.requireAccount();
 
-    const response = await this.getUpdates(account, timeoutMs);
+    let response = await this.getUpdates(account, timeoutMs);
+    if (isWechatSyncSessionTimeout(response) && this.syncBuffer) {
+      this.logger.log(
+        "WeChat sync session timed out. Clearing local sync cursor and retrying once.",
+      );
+      this.clearSyncBuffer();
+      response = await this.getUpdates(account, timeoutMs);
+    }
+
+    if (isWechatSyncSessionTimeout(response)) {
+      throw new Error('WeChat session timed out. Run "wechat-setup" to log in again.');
+    }
+
     const isError =
       (response.ret !== undefined && response.ret !== 0) ||
       (response.errcode !== undefined && response.errcode !== 0);
@@ -1051,7 +1081,7 @@ export class WeChatTransport {
     const account = this.getCredentials();
     if (!account) {
       throw new Error(
-        `No saved WeChat credentials found. Run "bun run setup" first. Expected file: ${CREDENTIALS_FILE}`,
+        `No saved WeChat credentials found. Start a bridge command in a terminal to log in automatically, or run "wechat-setup". Expected file: ${CREDENTIALS_FILE}`,
       );
     }
     return account;

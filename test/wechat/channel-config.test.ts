@@ -6,6 +6,7 @@ import {
   buildWorkspaceKey,
   getWorkspaceChannelPaths,
   normalizeWorkspacePath,
+  shouldMigrateLegacyCredentials,
 } from "../../src/wechat/channel-config.ts";
 
 describe("workspace channel paths", () => {
@@ -30,5 +31,25 @@ describe("workspace channel paths", () => {
     expect(pathsA.workspaceDir).not.toBe(pathsB.workspaceDir);
     expect(pathsA.stateFile.endsWith("bridge-state.json")).toBe(true);
     expect(pathsA.endpointFile.endsWith("codex-panel-endpoint.json")).toBe(true);
+  });
+
+  test("does not resurrect legacy credentials after global state exists", () => {
+    expect(
+      shouldMigrateLegacyCredentials({
+        channelDataDirHadState: true,
+        credentialsExists: false,
+        legacyCredentialsExists: true,
+      }),
+    ).toBe(false);
+  });
+
+  test("allows first-time migration from a legacy repo-local account", () => {
+    expect(
+      shouldMigrateLegacyCredentials({
+        channelDataDirHadState: false,
+        credentialsExists: false,
+        legacyCredentialsExists: true,
+      }),
+    ).toBe(true);
   });
 });
