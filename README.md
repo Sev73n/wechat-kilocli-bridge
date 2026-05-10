@@ -31,7 +31,17 @@
   - powershell.exe
 
 
-### 1. 克隆仓库并安装依赖
+### 1. 安装全局命令
+
+正式版本可以直接从 npm 安装：
+
+```bash
+npm install -g @unlinearity/cli-wechat-bridge
+```
+
+安装后可在任意项目目录中直接使用 `wechat-codex-start`、`wechat-claude-start`、`wechat-opencode-start` 等命令。
+
+如果你希望从源码运行或参与开发，也可以克隆仓库并安装依赖：
 
 ```bash
 git clone https://github.com/UNLINEARITY/CLI-WeChat-Bridge
@@ -39,9 +49,9 @@ cd CLI-WeChat-Bridge
 bun install
 ```
 
-### 2. 安装全局命令
+### 2. 源码安装全局命令
 
-如果你希望在任意目录直接使用本项目：
+如果使用源码仓库，希望将当前工作区安装为全局命令：
 
 ```bash
 npm install -g . #将命令下载到全局

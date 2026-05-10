@@ -4,6 +4,15 @@
 
 ## 版本列表
 
+### [v1.0.0](./1.0.0.md) / [中文说明](./1.0.0_CN.md)
+**稳定版与 npm 上架准备：多适配器 companion + Codex 隔离 + Windows 可靠性** - Codex、Claude、OpenCode 与 shell 工作流进入稳定发布节奏
+
+- **多适配器 companion**：OpenCode 进入主工作流，新增 `wechat-bridge-opencode` / `wechat-opencode` / `wechat-opencode-start`
+- **Codex 隔离与单活工作区**：`wechat-codex` 使用 bridge-owned runtime host，fallback session 与桌面端流量隔离，starter 按单活工作区切换器工作
+- **Windows 可靠性**：保留代理环境变量、消除启动闪窗、固定 CLI 入口行尾，并改善 transient companion 断开处理
+- **消息与附件修复**：Codex 忙碌时延迟投递微信消息，Claude final reply 可回退 transcript，中文附件发送提示词覆盖更完整
+- **统计**：61 个文件，新增 12,252 行
+
 ### [v0.9.0](./0.9.0.md) / [中文说明](./0.9.0_CN.md)
 **工作流与可靠性版本：一键启动 + 生命周期治理 + 附件与状态同步修复** - 本地 companion 启动更简单，bridge 退出与远程执行更可靠
 
@@ -68,6 +77,7 @@
 
 | 版本 | 日期 | 说明 | 文件变更 |
 |------|------|------|---------|
+| 1.0.0 | 2026-05-10 | 稳定版、npm 上架准备、多适配器 companion、Codex 隔离与 Windows 可靠性 | 61 个文件，+12,252/-423 |
 | 0.9.0 | 2026-03-27 | 一键启动、生命周期治理、附件与状态同步修复 | 43 个文件，+5,515/-154 |
 | 0.8.0 | 2026-03-26 | 版本检查、媒体支持、网络可靠性 | 18 个文件，+2,196/-505 |
 | 0.7.0 | 2026-03-25 | 完整 Claude 远程审批流程 | 15 个文件，+494/-62 |
