@@ -5,7 +5,9 @@ import {
   attachLocalCompanionMessageListener,
   buildLocalCompanionToken,
   clearLocalCompanionEndpoint,
+  clearLocalCompanionOccupancy,
   sendLocalCompanionMessage,
+  updateLocalCompanionOccupancy,
   writeLocalCompanionEndpoint,
   type LocalCompanionCloseReason,
   type LocalCompanionCommand,
@@ -251,6 +253,14 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         this.expectedCloseReason = null;
         this.socket = socket;
         this.detachMessageListener = detachListener;
+        updateLocalCompanionOccupancy(
+          this.options.cwd,
+          {
+            companionPid: message.companionPid,
+            companionConnectedAt: nowIso(),
+          },
+          this.endpoint?.instanceId,
+        );
         sendLocalCompanionMessage(socket, { type: "hello_ack" });
         return;
       }
@@ -262,6 +272,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
       if (this.socket === socket) {
         const expectedCloseReason = this.expectedCloseReason;
         this.expectedCloseReason = null;
+        clearLocalCompanionOccupancy(this.options.cwd, this.endpoint?.instanceId);
         this.detachPanelSocket();
         if (!this.shuttingDown) {
           this.handleCompanionDisconnect(expectedCloseReason);
@@ -283,6 +294,10 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
         return;
       case "state":
         if (this.endpoint) {
+          Object.assign(
+            this.endpoint,
+            buildCompanionHealthPatch(message.state, nowIso()),
+          );
           const nextSessionId = getSharedSessionIdFromAdapterState(message.state);
           if (
             this.endpoint.sharedSessionId !== nextSessionId ||
@@ -294,8 +309,8 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
               this.options.kind === "codex" || this.options.kind === "opencode" ? nextSessionId : undefined;
             this.endpoint.resumeConversationId = message.state.resumeConversationId;
             this.endpoint.transcriptPath = message.state.transcriptPath;
-            writeLocalCompanionEndpoint(this.endpoint);
           }
+          writeLocalCompanionEndpoint(this.endpoint);
         }
         this.state.pid = undefined;
         this.state.startedAt = undefined;
@@ -469,6 +484,21 @@ export function shouldStopBridgeAfterCompanionDisconnect(
   lifecycle: BridgeLifecycleMode | undefined,
 ): boolean {
   return lifecycle === "companion_bound";
+}
+
+export function buildCompanionHealthPatch(
+  state: BridgeAdapterState,
+  timestamp: string,
+): {
+  companionStatus: BridgeAdapterState["status"];
+  companionLastStateAt: string;
+  companionWorkerPid?: number;
+} {
+  return {
+    companionStatus: state.status,
+    companionLastStateAt: timestamp,
+    companionWorkerPid: state.pid,
+  };
 }
 
 export function isExpectedLocalCompanionClose(

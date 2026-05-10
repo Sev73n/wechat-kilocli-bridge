@@ -1,4 +1,8 @@
-import { clearLocalCompanionEndpoint, writeLocalCompanionEndpoint } from "../companion/local-companion-link.ts";
+import {
+  clearLocalCompanionEndpoint,
+  readLocalCompanionEndpoint,
+  writeLocalCompanionEndpoint,
+} from "../companion/local-companion-link.ts";
 import type { BridgeAdapter } from "./bridge-types.ts";
 import { hasLocalClientEndpointProvider } from "../runtime/runtime-types.ts";
 
@@ -14,7 +18,6 @@ export class BridgeController {
 
   syncLocalClientEndpoint(): void {
     if (!hasLocalClientEndpointProvider(this.adapter)) {
-      this.clearLocalClientEndpoint();
       return;
     }
 
@@ -24,8 +27,28 @@ export class BridgeController {
       return;
     }
 
+    const existing = readLocalCompanionEndpoint(this.cwd);
+    const adapterState = this.adapter.getState();
+    const nextEndpoint =
+      existing?.instanceId === endpoint.instanceId
+        ? {
+            ...endpoint,
+            companionPid: endpoint.companionPid ?? existing.companionPid,
+            companionConnectedAt:
+              endpoint.companionConnectedAt ?? existing.companionConnectedAt,
+            companionStatus: adapterState.status,
+            companionLastStateAt: new Date().toISOString(),
+            companionWorkerPid: adapterState.pid,
+          }
+        : {
+            ...endpoint,
+            companionStatus: adapterState.status,
+            companionLastStateAt: new Date().toISOString(),
+            companionWorkerPid: adapterState.pid,
+          };
+
     this.endpointInstanceId = endpoint.instanceId;
-    writeLocalCompanionEndpoint(endpoint);
+    writeLocalCompanionEndpoint(nextEndpoint);
   }
 
   clearLocalClientEndpoint(): void {

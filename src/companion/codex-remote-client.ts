@@ -10,7 +10,9 @@ import {
   resolveSpawnTarget,
 } from "../bridge/bridge-adapters.shared.ts";
 import {
+  clearLocalCompanionOccupancy,
   readLocalCompanionEndpoint,
+  updateLocalCompanionOccupancy,
   type LocalCompanionEndpoint,
 } from "./local-companion-link.ts";
 import { migrateLegacyChannelFiles } from "../wechat/channel-config.ts";
@@ -129,8 +131,19 @@ export async function runCodexRemoteClientFromEndpoint(
       },
     );
 
-    child.once("error", (error) => reject(error));
+    if (typeof child.pid === "number") {
+      updateLocalCompanionOccupancy(endpoint.cwd, {
+        companionPid: child.pid,
+        companionConnectedAt: new Date().toISOString(),
+      }, endpoint.instanceId);
+    }
+
+    child.once("error", (error) => {
+      clearLocalCompanionOccupancy(endpoint.cwd, endpoint.instanceId);
+      reject(error);
+    });
     child.once("exit", (code, signal) => {
+      clearLocalCompanionOccupancy(endpoint.cwd, endpoint.instanceId);
       if (signal) {
         process.kill(process.pid, signal);
         return;

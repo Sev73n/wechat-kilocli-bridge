@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import {
+  buildCompanionHealthPatch,
   buildCompanionReconnectTimeoutMessage,
   getCompanionDisconnectDisposition,
   isExpectedLocalCompanionClose,
@@ -82,5 +83,24 @@ describe("local companion proxy lifecycle", () => {
     ).toBe(
       "codex companion did not reconnect within 15s. Stopping transient bridge bound to wechat-codex.",
     );
+  });
+
+  test("buildCompanionHealthPatch persists stopped worker state for auto-heal decisions", () => {
+    expect(
+      buildCompanionHealthPatch(
+        {
+          kind: "codex",
+          status: "stopped",
+          pid: undefined,
+          cwd: "D:/work/project",
+          command: "codex",
+        },
+        "2026-03-28T00:08:00.000Z",
+      ),
+    ).toEqual({
+      companionStatus: "stopped",
+      companionLastStateAt: "2026-03-28T00:08:00.000Z",
+      companionWorkerPid: undefined,
+    });
   });
 });

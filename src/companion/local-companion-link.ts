@@ -10,6 +10,7 @@ import type {
   BridgeAdapterKind,
   BridgeAdapterState,
   BridgeEvent,
+  BridgeWorkerStatus,
 } from "../bridge/bridge-types.ts";
 import {
   LOCAL_CLIENT_PROTOCOL_VERSION,
@@ -138,6 +139,17 @@ function normalizeEndpoint(value: unknown): LocalCompanionEndpoint | null {
       typeof record.resumeConversationId === "string" ? record.resumeConversationId : undefined,
     transcriptPath:
       typeof record.transcriptPath === "string" ? record.transcriptPath : undefined,
+    companionPid: typeof record.companionPid === "number" ? record.companionPid : undefined,
+    companionConnectedAt:
+      typeof record.companionConnectedAt === "string" ? record.companionConnectedAt : undefined,
+    companionStatus:
+      typeof record.companionStatus === "string"
+        ? (record.companionStatus as BridgeWorkerStatus)
+        : undefined,
+    companionLastStateAt:
+      typeof record.companionLastStateAt === "string" ? record.companionLastStateAt : undefined,
+    companionWorkerPid:
+      typeof record.companionWorkerPid === "number" ? record.companionWorkerPid : undefined,
     startedAt: record.startedAt,
   };
 }
@@ -188,6 +200,88 @@ export function clearLocalCompanionEndpoint(cwd: string, instanceId?: string): v
     if (!endpoint || endpoint.instanceId === instanceId) {
       fs.rmSync(endpointFile, { force: true });
     }
+  } catch {
+    // Best effort cleanup.
+  }
+}
+
+export function clearLocalCompanionOccupancy(cwd: string, instanceId?: string): void {
+  try {
+    const endpoint = readLocalCompanionEndpoint(cwd);
+    if (!endpoint) {
+      return;
+    }
+
+    if (instanceId && endpoint.instanceId !== instanceId) {
+      return;
+    }
+
+    writeLocalCompanionEndpoint({
+      ...endpoint,
+      companionPid: undefined,
+      companionConnectedAt: undefined,
+      companionStatus: undefined,
+      companionLastStateAt: undefined,
+      companionWorkerPid: undefined,
+    });
+  } catch {
+    // Best effort cleanup.
+  }
+}
+
+export function updateLocalCompanionHealth(
+  cwd: string,
+  patch: {
+    companionStatus?: BridgeWorkerStatus;
+    companionLastStateAt?: string;
+    companionWorkerPid?: number;
+  },
+  instanceId?: string,
+): void {
+  try {
+    const endpoint = readLocalCompanionEndpoint(cwd);
+    if (!endpoint) {
+      return;
+    }
+
+    if (instanceId && endpoint.instanceId !== instanceId) {
+      return;
+    }
+
+    writeLocalCompanionEndpoint({
+      ...endpoint,
+      companionStatus: patch.companionStatus,
+      companionLastStateAt: patch.companionLastStateAt,
+      companionWorkerPid: patch.companionWorkerPid,
+    });
+  } catch {
+    // Best effort cleanup.
+  }
+}
+
+export function updateLocalCompanionOccupancy(
+  cwd: string,
+  patch: {
+    companionPid?: number;
+    companionConnectedAt?: string;
+  },
+  instanceId?: string,
+): void {
+  try {
+    const endpoint = readLocalCompanionEndpoint(cwd);
+    if (!endpoint) {
+      return;
+    }
+
+    if (instanceId && endpoint.instanceId !== instanceId) {
+      return;
+    }
+
+    writeLocalCompanionEndpoint({
+      ...endpoint,
+      companionPid: patch.companionPid,
+      companionConnectedAt: patch.companionConnectedAt,
+    });
   } catch {
     // Best effort cleanup.
   }

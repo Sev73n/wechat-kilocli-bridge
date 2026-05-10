@@ -1,4 +1,7 @@
-import type { BridgeAdapter } from "../bridge/bridge-types.ts";
+import type {
+  BridgeAdapter,
+  BridgeWorkerStatus,
+} from "../bridge/bridge-types.ts";
 
 export const LOCAL_CLIENT_PROTOCOL_VERSION = 2;
 export const CODEX_REMOTE_AUTH_TOKEN_ENV = "WECHAT_BRIDGE_CODEX_REMOTE_AUTH_TOKEN";
@@ -25,6 +28,11 @@ export type LocalClientEndpoint = {
   sharedThreadId?: string;
   resumeConversationId?: string;
   transcriptPath?: string;
+  companionPid?: number;
+  companionConnectedAt?: string;
+  companionStatus?: BridgeWorkerStatus;
+  companionLastStateAt?: string;
+  companionWorkerPid?: number;
   startedAt: string;
 };
 

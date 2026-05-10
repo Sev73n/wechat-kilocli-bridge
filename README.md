@@ -136,6 +136,14 @@ wechat-codex-start
 3. 等待当前目录对应的本地 companion endpoint 就绪
 4. 打开可见的 `wechat-codex` 会话
 
+`wechat-codex-start` 现在按**单活工作区切换器**工作：
+
+- 同一时间只有一个项目与微信对话
+- 在当前目录重复执行是幂等的
+- 如果当前目录已经有可见 companion / panel 在运行，则不会重复打开第二个窗口
+- 如果检测到可见端仍在但 worker 状态异常（如 `stopped` / `error`），会自动重启 bridge 再重新打开可见端
+- 在其他目录执行会显式切换活动工作区
+
 ### 5. 启动 Claude Code （不走Channels）
 
 与 Codex 类似的，
@@ -245,6 +253,13 @@ wechat-codex-start --profile work
 - `--profile <name-or-path>`：转发给后台启动的 `wechat-bridge-codex`
 - `--timeout-ms <ms>`：等待当前目录 endpoint 的最长时间，默认 `15000`
 
+行为说明：
+
+- 同目录重复执行：复用当前目录 bridge；如果可见 companion / panel 已经在线，则只提示当前工作区已激活，不会重复打开第二个窗口
+- 同目录检测到可见端仍在但 worker 状态异常（如 `stopped` / `error`）时：会自动回收旧 bridge 并重新启动
+- 不同目录执行：会停止旧目录的临时 bridge，并切换到新的活动工作区
+- 关闭可见 companion / panel 后，后台 `companion_bound` bridge 会一起退出；异常断开时会保留短暂重连窗口
+
 ### `wechat-claude-start` 参数
 
 示例：
@@ -282,6 +297,12 @@ wechat-claude-start --profile work
 - 单 owner
 - 单 bridge
 - 单活动工作区
+
+对 `wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` 来说，这意味着：
+
+- 它们是**单活工作区切换器**
+- 当前目录重复执行是幂等的
+- 其他目录重复执行会触发工作区切换，而不是并行多开
 
 ## 数据目录与状态文件
 
