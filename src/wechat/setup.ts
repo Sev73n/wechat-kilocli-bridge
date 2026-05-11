@@ -4,7 +4,6 @@
  *
  * Installed bridge commands run this automatically on first use.
  * To force a relogin manually:
- *   bun run setup
  *   wechat-setup
  */
 
@@ -238,8 +237,7 @@ function saveCredentials(account: StoredAccount): void {
 }
 
 function printPostLoginHelp(log: (message: string) => void): void {
-  log("No /pair step is required.");
-  log("The logged-in WeChat account above becomes the only authorized bridge owner.");
+  log("This WeChat account is now authorized for the bridge.");
   log("");
   log("Start from any project directory with one of:");
   log("  wechat-codex-start");
@@ -251,6 +249,8 @@ function printPostLoginHelp(log: (message: string) => void): void {
   log("  wechat-bridge-codex  +  wechat-codex");
   log("  wechat-bridge-claude +  wechat-claude");
   log("  wechat-bridge-opencode + wechat-opencode");
+  log("");
+  log("Run wechat-setup again any time you need to refresh the login.");
 }
 
 export async function runWechatLogin(
