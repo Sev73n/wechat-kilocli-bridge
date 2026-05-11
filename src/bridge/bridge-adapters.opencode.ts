@@ -192,6 +192,7 @@ const OPENCODE_DEBUG_ENABLED = /^(1|true|yes|on)$/i.test(
 const OPENCODE_DUPLICATE_EVENT_TTL_MS = 150;
 const OPENCODE_WECHAT_MIRROR_SUPPRESSION_TTL_MS = 30_000;
 const OPENCODE_RECENT_LOCAL_PROMPT_TTL_MS = 10_000;
+const OPENCODE_LOCAL_SESSION_CREATE_FOLLOW_TTL_MS = 5_000;
 
 /* ------------------------------------------------------------------ */
 /*  Adapter                                                            */
@@ -226,12 +227,14 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private readonly observedUserTextByPartId = new Map<string, string>();
   private readonly observedUserMessagePartIds = new Map<string, Set<string>>();
   private readonly pendingWechatPromptMirrorSuppressions: PendingWechatPromptMirrorSuppression[] = [];
+  private readonly recentWechatPromptMirrorSuppressions: PendingWechatPromptMirrorSuppression[] = [];
   private readonly recentSdkEventObservations = new Map<
     string,
     { streamName: SdkEventStreamName; observedAtMs: number }
   >();
   private suppressedTuiSessionSelectId: string | null = null;
   private lastMirroredLocalPrompt: { text: string; createdAtMs: number } | null = null;
+  private pendingLocalSessionCreateFollowUntilMs = 0;
 
   private pendingPermission: OpenCodePendingPermission | null = null;
 
@@ -329,6 +332,8 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       syncVisible: true,
       forceVisibleSync: true,
     });
+    this.recordPendingWechatPromptMirrorSuppression(session.id, normalized);
+    this.beginTrackedTurn(normalized, "wechat");
 
     try {
       const result = await this.client.session.promptAsync({
@@ -341,11 +346,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         throw new Error(`SDK error: ${describeUnknownError(result.error)}`);
       }
     } catch (err) {
+      this.settleTurnState();
+      this.clearObservedMessageTracking();
+      this.setStatus("idle");
       throw new Error(`Failed to send prompt: ${describeUnknownError(err)}`);
     }
-
-    this.recordPendingWechatPromptMirrorSuppression(session.id, normalized);
-    this.beginTrackedTurn(normalized, "wechat");
   }
 
   async listResumeSessions(limit = 10): Promise<BridgeResumeSessionCandidate[]> {
@@ -360,6 +365,36 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     throw new Error(
       'WeChat /resume is disabled in opencode mode. Use /session directly inside "wechat-opencode"; WeChat will follow the active local session.',
     );
+  }
+
+  async createSession(): Promise<void> {
+    if (!this.client) {
+      throw new Error("OpenCode adapter is not running.");
+    }
+    if (this.state.status === "busy") {
+      throw new Error("OpenCode is still working. Wait for the current reply or use /stop.");
+    }
+    if (this.pendingPermission) {
+      throw new Error("An OpenCode approval request is pending. Reply with /confirm <code> or /deny.");
+    }
+
+    this.outputBatcher.clear();
+    this.clearStreamedPartState();
+
+    const session = this.unwrapOrThrow(
+      await this.client.session.create({
+        directory: this.options.cwd,
+        workspace: this.activeWorkspaceId ?? undefined,
+      }),
+    );
+    this.switchSharedSession(session, {
+      source: "wechat",
+      reason: "wechat_resume",
+      notify: true,
+      clearTrackedTurn: true,
+      syncVisible: true,
+      forceVisibleSync: true,
+    });
   }
 
   async interrupt(): Promise<boolean> {
@@ -389,6 +424,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.clearWechatWorkingNotice(true);
     this.pendingLocalPrompt = "";
     this.localPromptNoticeSent = false;
+    this.pendingLocalSessionCreateFollowUntilMs = 0;
     this.clearObservedMessageTracking();
     this.recentSdkEventObservations.clear();
     this.clearPendingPermissionState();
@@ -450,6 +486,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.clearWechatWorkingNotice(true);
     this.pendingLocalPrompt = "";
     this.localPromptNoticeSent = false;
+    this.pendingLocalSessionCreateFollowUntilMs = 0;
     this.clearObservedMessageTracking();
     this.recentSdkEventObservations.clear();
     this.outputBatcher.clear();
@@ -858,7 +895,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       if (this.isImplicitLocalCompanionUiEvent(type)) {
         return true;
       }
-      return this.matchesCurrentDirectoryEvent(event);
+      return (
+        this.matchesCurrentDirectoryEvent(event) ||
+        this.shouldAcceptUnscopedLocalSessionCreatedEvent(event)
+      );
     }
 
     if (
@@ -866,7 +906,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       type === "session.updated" ||
       type === "session.deleted"
     ) {
-      return this.matchesCurrentDirectoryEvent(event);
+      return (
+        this.matchesCurrentDirectoryEvent(event) ||
+        (type === "session.created" &&
+          this.shouldAcceptUnscopedLocalSessionCreatedEvent(event))
+      );
     }
 
     return false;
@@ -1177,9 +1221,22 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     const session = this.extractSessionReference(properties);
-    if (!this.syncTrackedSessionFromEvent(session)) {
+    if (this.syncTrackedSessionFromEvent(session)) {
       return;
     }
+    if (!this.shouldFollowCreatedLocalSession(session)) {
+      return;
+    }
+
+    this.pendingLocalSessionCreateFollowUntilMs = 0;
+    this.logDebug(`[opencode-adapter:local-follow] session.created ${session.id}`);
+    this.switchSharedSession(session, {
+      source: "local",
+      reason: "local_follow",
+      notify: true,
+      clearTrackedTurn: true,
+      syncVisible: true,
+    });
   }
 
   private handleSessionUpdated(properties: unknown): void {
@@ -1270,6 +1327,17 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       : delta
         ? this.consumeVisiblePartDelta(partId, delta)
         : "";
+    const observedText =
+      typeof part.messageID === "string"
+        ? this.observedOpenCodeMessages.get(part.messageID)?.text
+        : undefined;
+    if (
+      this.matchesRecentWechatPromptMirror(part.sessionID, observedText || partText || delta || text, {
+        allowPrefix: true,
+      })
+    ) {
+      return;
+    }
     this.pushVisibleOutput(text);
   }
 
@@ -1329,6 +1397,17 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     const text = this.consumeVisiblePartDelta(partId, delta);
+    const observedText =
+      typeof properties.messageID === "string"
+        ? this.observedOpenCodeMessages.get(properties.messageID)?.text
+        : undefined;
+    if (
+      this.matchesRecentWechatPromptMirror(sessionId, observedText || delta || text, {
+        allowPrefix: true,
+      })
+    ) {
+      return;
+    }
     this.pushVisibleOutput(text);
   }
 
@@ -1378,6 +1457,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
         this.handleLocalPromptSubmit();
         return;
       default:
+        if (this.isLocalSessionNavigationCommand(command)) {
+          this.markPendingLocalSessionCreateFollow();
+        }
         return;
     }
   }
@@ -1387,7 +1469,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
-    const sessionId = typeof properties.sessionID === "string" ? properties.sessionID : undefined;
+    const sessionId = this.extractSessionId(properties) ?? undefined;
     if (!sessionId) {
       return;
     }
@@ -1399,6 +1481,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
     this.pendingLocalPrompt = "";
     this.localPromptNoticeSent = false;
+    this.pendingLocalSessionCreateFollowUntilMs = 0;
     this.logDebug(`[opencode-adapter:local-follow] tui.session.select ${sessionId}`);
     this.switchSharedSession(
       {
@@ -1441,7 +1524,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
           syncVisible: true,
         },
       );
+      return;
     }
+
+    this.markPendingLocalSessionCreateFollow();
   }
 
   private handleSessionError(properties: Record<string, unknown> | undefined): void {
@@ -1561,7 +1647,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     observed.emitted = true;
-    if (this.shouldSuppressWechatMirroredPrompt(observed.sessionId, text)) {
+    if (
+      this.shouldSuppressWechatMirroredPrompt(observed.sessionId, text) ||
+      this.matchesRecentWechatPromptMirror(observed.sessionId, text)
+    ) {
       this.cleanupObservedOpenCodeMessage(messageId);
       return;
     }
@@ -1585,17 +1674,14 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
-    const cutoff = Date.now() - OPENCODE_WECHAT_MIRROR_SUPPRESSION_TTL_MS;
-    for (let index = this.pendingWechatPromptMirrorSuppressions.length - 1; index >= 0; index -= 1) {
-      if (this.pendingWechatPromptMirrorSuppressions[index]!.createdAtMs < cutoff) {
-        this.pendingWechatPromptMirrorSuppressions.splice(index, 1);
-      }
-    }
-    this.pendingWechatPromptMirrorSuppressions.push({
+    this.pruneWechatPromptMirrorSuppressions();
+    const suppression = {
       sessionId,
       text: normalizedText,
       createdAtMs: Date.now(),
-    });
+    };
+    this.pendingWechatPromptMirrorSuppressions.push(suppression);
+    this.recentWechatPromptMirrorSuppressions.push(suppression);
   }
 
   private shouldSuppressWechatMirroredPrompt(sessionId: string, text: string): boolean {
@@ -1604,13 +1690,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return false;
     }
 
-    const cutoff = Date.now() - OPENCODE_WECHAT_MIRROR_SUPPRESSION_TTL_MS;
+    this.pruneWechatPromptMirrorSuppressions();
     for (let index = this.pendingWechatPromptMirrorSuppressions.length - 1; index >= 0; index -= 1) {
       const pending = this.pendingWechatPromptMirrorSuppressions[index]!;
-      if (pending.createdAtMs < cutoff) {
-        this.pendingWechatPromptMirrorSuppressions.splice(index, 1);
-        continue;
-      }
       if (pending.sessionId === sessionId && pending.text === normalizedText) {
         this.pendingWechatPromptMirrorSuppressions.splice(index, 1);
         return true;
@@ -1618,6 +1700,42 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     }
 
     return false;
+  }
+
+  private matchesRecentWechatPromptMirror(
+    sessionId: string | undefined,
+    text: string | undefined,
+    options: { allowPrefix?: boolean } = {},
+  ): boolean {
+    const normalizedText = normalizeOutput(text ?? "").trim();
+    if (!sessionId || !normalizedText) {
+      return false;
+    }
+
+    this.pruneWechatPromptMirrorSuppressions();
+    return this.recentWechatPromptMirrorSuppressions.some((pending) => {
+      if (pending.sessionId !== sessionId) {
+        return false;
+      }
+      if (pending.text === normalizedText) {
+        return true;
+      }
+      return options.allowPrefix === true && pending.text.startsWith(normalizedText);
+    });
+  }
+
+  private pruneWechatPromptMirrorSuppressions(): void {
+    const cutoff = Date.now() - OPENCODE_WECHAT_MIRROR_SUPPRESSION_TTL_MS;
+    for (let index = this.pendingWechatPromptMirrorSuppressions.length - 1; index >= 0; index -= 1) {
+      if (this.pendingWechatPromptMirrorSuppressions[index]!.createdAtMs < cutoff) {
+        this.pendingWechatPromptMirrorSuppressions.splice(index, 1);
+      }
+    }
+    for (let index = this.recentWechatPromptMirrorSuppressions.length - 1; index >= 0; index -= 1) {
+      if (this.recentWechatPromptMirrorSuppressions[index]!.createdAtMs < cutoff) {
+        this.recentWechatPromptMirrorSuppressions.splice(index, 1);
+      }
+    }
   }
 
   private wasRecentlyMirroredLocalPrompt(text: string): boolean {
@@ -1732,6 +1850,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     this.observedUserTextByPartId.clear();
     this.observedUserMessagePartIds.clear();
     this.pendingWechatPromptMirrorSuppressions.length = 0;
+    this.recentWechatPromptMirrorSuppressions.length = 0;
     this.lastMirroredLocalPrompt = null;
   }
 
@@ -1893,10 +2012,22 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private extractSessionReference(
     properties: Record<string, unknown>,
   ): { id: string; workspaceID?: string } | null {
-    if (typeof properties.sessionID === "string") {
+    if (typeof properties.sessionID === "string" || typeof properties.sessionId === "string") {
+      const id =
+        typeof properties.sessionID === "string"
+          ? properties.sessionID
+          : properties.sessionId;
       return {
-        id: properties.sessionID,
+        id,
         workspaceID: this.extractWorkspaceId(properties) ?? undefined,
+      };
+    }
+
+    const session = isRecord(properties.session) ? properties.session : undefined;
+    if (typeof session?.id === "string") {
+      return {
+        id: session.id,
+        workspaceID: this.extractWorkspaceId(session) ?? this.extractWorkspaceId(properties) ?? undefined,
       };
     }
 
@@ -1920,6 +2051,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return properties.workspaceID;
     }
 
+    const session = isRecord(properties.session) ? properties.session : undefined;
+    if (typeof session?.workspaceID === "string") {
+      return session.workspaceID;
+    }
+
     const info = isRecord(properties.info) ? properties.info : undefined;
     if (typeof info?.workspaceID === "string") {
       return info.workspaceID;
@@ -1934,6 +2070,60 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       this.state.activeTurnOrigin === "local" &&
       this.hasTrackedTurnState()
     );
+  }
+
+  private markPendingLocalSessionCreateFollow(): void {
+    this.pendingLocalSessionCreateFollowUntilMs =
+      Date.now() + OPENCODE_LOCAL_SESSION_CREATE_FOLLOW_TTL_MS;
+  }
+
+  private hasPendingLocalSessionCreateFollow(): boolean {
+    return Date.now() <= this.pendingLocalSessionCreateFollowUntilMs;
+  }
+
+  private shouldAcceptUnscopedLocalSessionCreatedEvent(event: NormalizedSdkEvent): boolean {
+    if (this.normalizeEventType(event.type) !== "session.created") {
+      return false;
+    }
+    if (this.options.renderMode !== "companion") {
+      return false;
+    }
+
+    const payload = this.extractEventPayload(event);
+    if (!isRecord(payload)) {
+      return false;
+    }
+
+    const session = this.extractSessionReference(payload);
+    if (!session?.id || session.id === this.activeSessionId) {
+      return false;
+    }
+
+    if (
+      typeof event.directory === "string" ||
+      this.extractSessionDirectory(payload) ||
+      this.extractWorkspaceId(payload)
+    ) {
+      return false;
+    }
+
+    return this.hasPendingLocalSessionCreateFollow() || Boolean(this.activeSessionId);
+  }
+
+  private shouldFollowCreatedLocalSession(
+    session: { id: string; workspaceID?: string } | null,
+  ): session is { id: string; workspaceID?: string } {
+    if (!session?.id || session.id === this.activeSessionId) {
+      return false;
+    }
+
+    if (this.hasPendingLocalSessionCreateFollow()) {
+      this.pendingLocalSessionCreateFollowUntilMs = 0;
+      return true;
+    }
+
+    this.pendingLocalSessionCreateFollowUntilMs = 0;
+    return Boolean(this.activeSessionId);
   }
 
   private switchSharedSession(
@@ -2025,7 +2215,9 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
     const normalized = command.trim().toLowerCase();
     return (
       normalized === "session" ||
+      normalized === "new" ||
       normalized === "/session" ||
+      normalized === "/new" ||
       normalized.startsWith("session.") ||
       normalized.startsWith("/session ")
     );
@@ -2089,6 +2281,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private extractSessionDirectory(properties: Record<string, unknown>): string | null {
     if (typeof properties.directory === "string") {
       return properties.directory;
+    }
+
+    const session = isRecord(properties.session) ? properties.session : undefined;
+    if (typeof session?.directory === "string") {
+      return session.directory;
     }
 
     const info = isRecord(properties.info) ? properties.info : undefined;

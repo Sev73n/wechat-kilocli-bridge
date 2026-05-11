@@ -29,6 +29,13 @@ export class LegacyAdapterRuntime implements RuntimeHost {
     await this.adapter.resumeSession(sessionId);
   }
 
+  async createSession(): Promise<void> {
+    if (!this.adapter.createSession) {
+      throw new Error(`/${this.adapter.getState().kind} does not support creating sessions from WeChat.`);
+    }
+    await this.adapter.createSession();
+  }
+
   async interrupt(): Promise<boolean> {
     return await this.adapter.interrupt();
   }

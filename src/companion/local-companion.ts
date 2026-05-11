@@ -275,6 +275,14 @@ export async function runLocalCompanion(options: LocalCompanionCliOptions): Prom
           publishState();
           sendResponse(socket, message.id, true);
           break;
+        case "create_session":
+          if (!adapter.createSession) {
+            throw new Error(`/${adapter.getState().kind} does not support creating sessions from WeChat.`);
+          }
+          await adapter.createSession();
+          publishState();
+          sendResponse(socket, message.id, true);
+          break;
         case "interrupt":
           sendResponse(socket, message.id, true, await adapter.interrupt());
           break;

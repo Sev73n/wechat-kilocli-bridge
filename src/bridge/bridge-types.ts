@@ -209,6 +209,7 @@ export interface BridgeAdapter {
   sendInput(text: string): Promise<void>;
   listResumeSessions(limit?: number): Promise<BridgeResumeSessionCandidate[]>;
   resumeSession(sessionId: string): Promise<void>;
+  createSession?(): Promise<void>;
   interrupt(): Promise<boolean>;
   reset(): Promise<void>;
   resolveApproval(action: "confirm" | "deny"): Promise<boolean>;

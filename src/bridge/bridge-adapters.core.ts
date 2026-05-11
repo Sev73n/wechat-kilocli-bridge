@@ -162,6 +162,12 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
     });
   }
 
+  async createSession(): Promise<void> {
+    await this.sendRequest({
+      command: "create_session",
+    });
+  }
+
   async interrupt(): Promise<boolean> {
     const result = await this.sendRequest({
       command: "interrupt",

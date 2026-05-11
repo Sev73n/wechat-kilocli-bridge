@@ -23,6 +23,7 @@ export type LocalCompanionCommand =
   | { command: "list_resume_threads"; limit?: number }
   | { command: "resume_session"; sessionId: string }
   | { command: "resume_thread"; threadId: string }
+  | { command: "create_session" }
   | { command: "interrupt" }
   | { command: "reset" }
   | { command: "dispose" }

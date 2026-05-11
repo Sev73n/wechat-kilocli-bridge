@@ -493,6 +493,78 @@ describe("OpenCode visible TUI session sync", () => {
     });
   });
 
+  test("creates a new OpenCode session from a WeChat control command", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const events: Array<{ type: string; sessionId?: string; source?: string; reason?: string }> = [];
+    const selectSessionCalls: Array<Record<string, unknown>> = [];
+    adapter.setEventSink((event) => {
+      events.push(
+        event as unknown as { type: string; sessionId?: string; source?: string; reason?: string },
+      );
+    });
+    const internal = adapter as unknown as {
+      state: { status: string; sharedSessionId?: string; sharedThreadId?: string };
+      activeSessionId: string | null;
+      client: {
+        session: {
+          create(options?: Record<string, unknown>): Promise<unknown>;
+        };
+        tui: {
+          selectSession(options?: Record<string, unknown>): Promise<unknown>;
+        };
+      };
+    };
+
+    internal.state.status = "idle";
+    internal.activeSessionId = "session_old";
+    internal.client = {
+      session: {
+        create: async () => ({
+          data: createSdkSessionRecord("session_created_from_wechat", { workspaceID: "workspace_new" }),
+          error: undefined,
+          request: {},
+          response: {},
+        }),
+      },
+      tui: {
+        selectSession: async (options = {}) => {
+          selectSessionCalls.push(options);
+          return {
+            data: true,
+            error: undefined,
+            request: {},
+            response: {},
+          };
+        },
+      },
+    };
+
+    await adapter.createSession();
+
+    expect(internal.activeSessionId).toBe("session_created_from_wechat");
+    expect(internal.state.sharedSessionId).toBe("session_created_from_wechat");
+    expect(internal.state.sharedThreadId).toBe("session_created_from_wechat");
+    expect(selectSessionCalls).toEqual([
+      expect.objectContaining({
+        directory: process.cwd(),
+        sessionID: "session_created_from_wechat",
+        workspace: "workspace_new",
+      }),
+    ]);
+    expect(events.filter((event) => event.type === "session_switched")).toEqual([
+      expect.objectContaining({
+        sessionId: "session_created_from_wechat",
+        source: "wechat",
+        reason: "wechat_resume",
+      }),
+    ]);
+  });
+
   test("drives the visible TUI when a local session switch becomes authoritative", async () => {
     const adapter = new OpenCodeServerAdapter({
       kind: "opencode",
@@ -1163,6 +1235,241 @@ describe("OpenCode session.created handling", () => {
     expect(events.filter((event) => event.type === "session_switched")).toHaveLength(0);
   });
 
+  test("follows a session.created event after a local new-session command", () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const events: Array<{ type: string; sessionId?: string; source?: string; reason?: string }> = [];
+    adapter.setEventSink((event) => {
+      events.push(
+        event as unknown as { type: string; sessionId?: string; source?: string; reason?: string },
+      );
+    });
+    const internal = adapter as unknown as {
+      state: {
+        sharedSessionId?: string;
+        sharedThreadId?: string;
+        activeRuntimeSessionId?: string;
+        lastSessionSwitchSource?: string;
+        lastSessionSwitchReason?: string;
+      };
+      activeSessionId: string | null;
+      handleSseEvent(event: { type: string; properties?: unknown }): void;
+    };
+
+    internal.activeSessionId = "session_old_local";
+    internal.state.sharedSessionId = "session_old_local";
+    internal.state.sharedThreadId = "session_old_local";
+    internal.state.activeRuntimeSessionId = "session_old_local";
+
+    internal.handleSseEvent({
+      type: "command.executed",
+      properties: { name: "session.new", arguments: "" },
+    });
+    internal.handleSseEvent({
+      type: "session.created",
+      properties: { info: { id: "session_new_from_local", title: "New local session" } },
+    });
+
+    expect(internal.activeSessionId).toBe("session_new_from_local");
+    expect(internal.state.sharedSessionId).toBe("session_new_from_local");
+    expect(internal.state.sharedThreadId).toBe("session_new_from_local");
+    expect(internal.state.activeRuntimeSessionId).toBe("session_new_from_local");
+    expect(internal.state.lastSessionSwitchSource).toBe("local");
+    expect(internal.state.lastSessionSwitchReason).toBe("local_follow");
+    expect(events.filter((event) => event.type === "session_switched")).toEqual([
+      expect.objectContaining({
+        sessionId: "session_new_from_local",
+        source: "local",
+        reason: "local_follow",
+      }),
+    ]);
+  });
+
+  test("follows a new local session created after startup without a command marker", () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const events: Array<{ type: string; sessionId?: string; source?: string; reason?: string }> = [];
+    adapter.setEventSink((event) => {
+      events.push(
+        event as unknown as { type: string; sessionId?: string; source?: string; reason?: string },
+      );
+    });
+    const internal = adapter as unknown as {
+      state: {
+        sharedSessionId?: string;
+        sharedThreadId?: string;
+        activeRuntimeSessionId?: string;
+        lastSessionSwitchSource?: string;
+        lastSessionSwitchReason?: string;
+      };
+      activeSessionId: string | null;
+      handleSseEvent(event: { type: string; properties?: unknown }): void;
+    };
+
+    internal.activeSessionId = "session_old_local";
+    internal.state.sharedSessionId = "session_old_local";
+    internal.state.sharedThreadId = "session_old_local";
+    internal.state.activeRuntimeSessionId = "session_old_local";
+
+    internal.handleSseEvent({
+      type: "session.created",
+      properties: {
+        session: {
+          id: "session_created_without_marker",
+          directory: process.cwd(),
+        },
+      },
+    });
+
+    expect(internal.activeSessionId).toBe("session_created_without_marker");
+    expect(internal.state.sharedSessionId).toBe("session_created_without_marker");
+    expect(internal.state.sharedThreadId).toBe("session_created_without_marker");
+    expect(internal.state.activeRuntimeSessionId).toBe("session_created_without_marker");
+    expect(internal.state.lastSessionSwitchSource).toBe("local");
+    expect(internal.state.lastSessionSwitchReason).toBe("local_follow");
+    expect(events.filter((event) => event.type === "session_switched")).toEqual([
+      expect.objectContaining({
+        sessionId: "session_created_without_marker",
+        source: "local",
+        reason: "local_follow",
+      }),
+    ]);
+  });
+
+  test("follows unscoped companion global session.created events after startup", () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const events: Array<{ type: string; sessionId?: string; source?: string; reason?: string }> = [];
+    adapter.setEventSink((event) => {
+      events.push(
+        event as unknown as { type: string; sessionId?: string; source?: string; reason?: string },
+      );
+    });
+    const internal = adapter as unknown as {
+      state: {
+        sharedSessionId?: string;
+        sharedThreadId?: string;
+        activeRuntimeSessionId?: string;
+        lastSessionSwitchSource?: string;
+        lastSessionSwitchReason?: string;
+      };
+      activeSessionId: string | null;
+      normalizeSdkEvent(
+        event: unknown,
+      ): { type: string; properties?: unknown; data?: unknown; directory?: string } | null;
+      shouldHandleSseEvent(
+        event: { type: string; properties?: unknown; data?: unknown; directory?: string },
+        streamName: string,
+      ): boolean;
+      handleSseEvent(event: { type: string; properties?: unknown; data?: unknown }): void;
+    };
+
+    internal.activeSessionId = "session_old_local";
+    internal.state.sharedSessionId = "session_old_local";
+    internal.state.sharedThreadId = "session_old_local";
+    internal.state.activeRuntimeSessionId = "session_old_local";
+
+    const globalEvent = internal.normalizeSdkEvent({
+      payload: {
+        type: "session.created",
+        properties: {
+          sessionID: "session_unscoped_created",
+          info: { id: "session_unscoped_created", title: "New local session" },
+        },
+      },
+    });
+
+    expect(globalEvent).not.toBeNull();
+    expect(internal.shouldHandleSseEvent(globalEvent!, "global-event")).toBe(true);
+    internal.handleSseEvent(globalEvent!);
+
+    expect(internal.activeSessionId).toBe("session_unscoped_created");
+    expect(internal.state.sharedSessionId).toBe("session_unscoped_created");
+    expect(internal.state.sharedThreadId).toBe("session_unscoped_created");
+    expect(internal.state.activeRuntimeSessionId).toBe("session_unscoped_created");
+    expect(internal.state.lastSessionSwitchSource).toBe("local");
+    expect(internal.state.lastSessionSwitchReason).toBe("local_follow");
+    expect(events.filter((event) => event.type === "session_switched")).toEqual([
+      expect.objectContaining({
+        sessionId: "session_unscoped_created",
+        source: "local",
+        reason: "local_follow",
+      }),
+    ]);
+  });
+
+  test("follows the first unscoped companion session.created after a local new command", () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+      renderMode: "companion",
+    });
+    const events: Array<{ type: string; sessionId?: string; source?: string; reason?: string }> = [];
+    adapter.setEventSink((event) => {
+      events.push(
+        event as unknown as { type: string; sessionId?: string; source?: string; reason?: string },
+      );
+    });
+    const internal = adapter as unknown as {
+      state: {
+        sharedSessionId?: string;
+        sharedThreadId?: string;
+        activeRuntimeSessionId?: string;
+      };
+      activeSessionId: string | null;
+      normalizeSdkEvent(
+        event: unknown,
+      ): { type: string; properties?: unknown; data?: unknown; directory?: string } | null;
+      shouldHandleSseEvent(
+        event: { type: string; properties?: unknown; data?: unknown; directory?: string },
+        streamName: string,
+      ): boolean;
+      handleSseEvent(event: { type: string; properties?: unknown; data?: unknown }): void;
+    };
+
+    internal.handleSseEvent({
+      type: "tui.command.execute",
+      properties: { command: "session.new" },
+    });
+
+    const globalEvent = internal.normalizeSdkEvent({
+      payload: {
+        type: "session.created",
+        properties: {
+          sessionID: "session_first_unscoped",
+          info: { id: "session_first_unscoped", title: "First local session" },
+        },
+      },
+    });
+
+    expect(globalEvent).not.toBeNull();
+    expect(internal.shouldHandleSseEvent(globalEvent!, "global-event")).toBe(true);
+    internal.handleSseEvent(globalEvent!);
+
+    expect(internal.activeSessionId).toBe("session_first_unscoped");
+    expect(internal.state.sharedSessionId).toBe("session_first_unscoped");
+    expect(internal.state.sharedThreadId).toBe("session_first_unscoped");
+    expect(internal.state.activeRuntimeSessionId).toBe("session_first_unscoped");
+    expect(events.filter((event) => event.type === "session_switched")).toEqual([
+      expect.objectContaining({
+        sessionId: "session_first_unscoped",
+        source: "local",
+        reason: "local_follow",
+      }),
+    ]);
+  });
+
   test("ignores session.created with missing session ID", () => {
     const adapter = new OpenCodeServerAdapter({
       kind: "opencode",
@@ -1425,6 +1732,43 @@ describe("OpenCode local TUI tracking", () => {
     expect(events.filter((event) => event.type === "session_switched")).toEqual([
       expect.objectContaining({
         sessionId: "session_selected_local",
+        source: "local",
+        reason: "local_follow",
+      }),
+    ]);
+  });
+
+  test("tracks camelCase local TUI session selections", () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const events: Array<{ type: string; sessionId?: string; source?: string; reason?: string }> = [];
+    adapter.setEventSink((event) => {
+      events.push(
+        event as unknown as { type: string; sessionId?: string; source?: string; reason?: string },
+      );
+    });
+    const internal = adapter as unknown as {
+      state: { sharedSessionId?: string; sharedThreadId?: string; activeRuntimeSessionId?: string };
+      activeSessionId: string | null;
+      handleSseEvent(event: { type: string; properties?: unknown }): void;
+    };
+
+    internal.activeSessionId = "session_old_local";
+    internal.handleSseEvent({
+      type: "tui.session.select",
+      properties: { sessionId: "session_selected_camel" },
+    });
+
+    expect(internal.activeSessionId).toBe("session_selected_camel");
+    expect(internal.state.sharedSessionId).toBe("session_selected_camel");
+    expect(internal.state.sharedThreadId).toBe("session_selected_camel");
+    expect(internal.state.activeRuntimeSessionId).toBe("session_selected_camel");
+    expect(events.filter((event) => event.type === "session_switched")).toEqual([
+      expect.objectContaining({
+        sessionId: "session_selected_camel",
         source: "local",
         reason: "local_follow",
       }),
@@ -2188,6 +2532,93 @@ describe("OpenCode message.part.updated handling", () => {
     });
 
     expect(events.filter((event) => event.type === "mirrored_user_input")).toHaveLength(0);
+  });
+
+  test("does not classify promptAsync-time WeChat echoes as local OpenCode input", async () => {
+    const adapter = new OpenCodeServerAdapter({
+      kind: "opencode",
+      command: "opencode",
+      cwd: process.cwd(),
+    });
+    const events: Array<{ type: string; text?: string; origin?: string; status?: string }> = [];
+    adapter.setEventSink((event) => {
+      events.push(event as unknown as { type: string; text?: string; origin?: string; status?: string });
+    });
+    const internal = adapter as unknown as {
+      client: {
+        session: {
+          create(options?: Record<string, unknown>): Promise<unknown>;
+          promptAsync(options?: Record<string, unknown>): Promise<unknown>;
+        };
+      };
+      state: { status: string; activeTurnOrigin?: string };
+      outputBatcher: { flushNow(): Promise<void>; getRecentSummary(maxLength?: number): string };
+      handleSseEvent(event: { type: string; properties?: unknown }): void;
+    };
+
+    internal.client = {
+      session: {
+        create: async () => ({
+          data: createSdkSessionRecord("session_wechat_prompt_async"),
+          error: undefined,
+          request: {},
+          response: {},
+        }),
+        promptAsync: async () => {
+          internal.handleSseEvent({
+            type: "message.part.updated",
+            properties: {
+              part: {
+                id: "p_user_prompt_async",
+                sessionID: "session_wechat_prompt_async",
+                messageID: "m_user_prompt_async",
+                type: "text",
+                text: "hello from wechat",
+              },
+            },
+          });
+          internal.handleSseEvent({
+            type: "message.updated",
+            properties: {
+              sessionID: "session_wechat_prompt_async",
+              info: {
+                id: "m_user_prompt_async",
+                sessionID: "session_wechat_prompt_async",
+                role: "user",
+              },
+            },
+          });
+          internal.handleSseEvent({
+            type: "message.part.updated",
+            properties: {
+              part: {
+                id: "p_assistant_prompt_async",
+                sessionID: "session_wechat_prompt_async",
+                messageID: "m_assistant_prompt_async",
+                type: "text",
+                text: "Assistant answer",
+              },
+            },
+          });
+          return {
+            data: undefined,
+            error: undefined,
+            request: {},
+            response: {},
+          };
+        },
+      },
+    };
+
+    await adapter.sendInput("hello from wechat");
+    await internal.outputBatcher.flushNow();
+
+    expect(internal.state.status).toBe("busy");
+    expect(internal.state.activeTurnOrigin).toBe("wechat");
+    expect(events.filter((event) => event.type === "mirrored_user_input")).toHaveLength(0);
+    expect(events.filter((event) => event.type === "stdout").map((event) => event.text).join(""))
+      .toBe("Assistant answer");
+    expect(internal.outputBatcher.getRecentSummary(500)).toBe("Assistant answer");
   });
 });
 

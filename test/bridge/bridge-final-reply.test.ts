@@ -145,6 +145,34 @@ describe("forwardWechatFinalReply", () => {
     ]);
   });
 
+  test("keeps OpenCode answers when inline reasoning shares the same line", async () => {
+    const calls: string[] = [];
+
+    await forwardWechatFinalReply({
+      adapter: "opencode",
+      rawText: "hiThe user is just saying hi. I should respond briefly.Hello! How can I help?",
+      sender: {
+        sendText: async (text) => {
+          calls.push(`text:${text}`);
+        },
+        sendImage: async (imagePath) => {
+          calls.push(`image:${imagePath}`);
+        },
+        sendFile: async (filePath) => {
+          calls.push(`file:${filePath}`);
+        },
+        sendVoice: async (voicePath) => {
+          calls.push(`voice:${voicePath}`);
+        },
+        sendVideo: async (videoPath) => {
+          calls.push(`video:${videoPath}`);
+        },
+      },
+    });
+
+    expect(calls).toEqual(["text:Hello! How can I help?"]);
+  });
+
   test("sanitizes noisy OpenCode final replies before sending to WeChat", async () => {
     const calls: string[] = [];
 

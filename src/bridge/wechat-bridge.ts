@@ -1164,6 +1164,22 @@ async function handleInboundMessage(params: {
       );
       return null;
     }
+    case "new_session": {
+      if (!adapter.createSession) {
+        await queueWechatMessage(
+          message.senderId,
+          `/new is not available in ${options.adapter} mode.`,
+        );
+        return null;
+      }
+      await outputBatcher.flushNow();
+      outputBatcher.clear();
+      stateStore.clearPendingConfirmation();
+      stateStore.clearSharedSessionId();
+      await adapter.createSession();
+      stateStore.appendLog(`New ${options.adapter} session requested by owner.`);
+      return null;
+    }
     case "stop": {
       const interrupted = await adapter.interrupt();
       await queueWechatMessage(

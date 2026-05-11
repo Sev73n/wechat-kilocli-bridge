@@ -36,6 +36,8 @@ describe("parseSystemCommand", () => {
     expect(parseSystemCommand("/status")).toEqual({ type: "status" });
     expect(parseSystemCommand("/resume")).toEqual({ type: "resume" });
     expect(parseSystemCommand("/resume 2")).toEqual({ type: "resume", target: "2" });
+    expect(parseSystemCommand("/new")).toEqual({ type: "new_session" });
+    expect(parseSystemCommand("/new-session")).toEqual({ type: "new_session" });
     expect(parseSystemCommand("/reset")).toEqual({ type: "reset" });
     expect(parseSystemCommand("/stop")).toEqual({ type: "stop" });
     expect(parseSystemCommand("/confirm 123456")).toEqual({

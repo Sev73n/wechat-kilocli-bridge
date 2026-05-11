@@ -24,6 +24,7 @@ const ANSI_ESCAPE_RE =
 export type SystemCommand =
   | { type: "status" }
   | { type: "resume"; target?: string }
+  | { type: "new_session" }
   | { type: "stop" }
   | { type: "reset" }
   | { type: "confirm"; code?: string }
@@ -215,6 +216,9 @@ export function parseSystemCommand(text: string): SystemCommand | null {
       return { type: "status" };
     case "/resume":
       return argument ? { type: "resume", target: argument } : { type: "resume" };
+    case "/new":
+    case "/new-session":
+      return { type: "new_session" };
     case "/stop":
       return { type: "stop" };
     case "/reset":
@@ -937,6 +941,7 @@ const OPENCODE_REASONING_LINE_RES = [
   /\bI need to (?:respond|reply|answer|tell the user)\b/i,
   /\bWe need to (?:respond|reply|answer)\b/i,
   /\bI should\b/i,
+  /\bI(?:'ll| will) (?:respond|reply|answer|tell the user|provide)\b/i,
   /\bI'll provide\b/i,
   /^Let me (?:directly )?(?:answer|respond)\b/i,
   /根据系统提示/i,
@@ -948,11 +953,37 @@ const OPENCODE_REASONING_LINE_RES = [
   /^用户(?:说|问)了/,
 ];
 
+const OPENCODE_INLINE_REASONING_MARKER_RE =
+  /\b(?:The user\b|I need to\b|I should\b|I(?:'ll| will)\b|We need to\b|Let me\b)/i;
+const OPENCODE_INLINE_REASONING_SENTENCE_RE =
+  /^(?:The user\b|I need to\b|I should\b|I(?:'ll| will)\b|We need to\b|Let me\b)[^.!?\n]*(?:[.!?]+)\s*/i;
+
+function stripInlineOpenCodeReasoningPrefix(text: string): string {
+  let current = text.trim();
+  const markerIndex = current.search(OPENCODE_INLINE_REASONING_MARKER_RE);
+  if (markerIndex > 0 && markerIndex <= 80) {
+    current = current.slice(markerIndex).trimStart();
+  }
+
+  for (let index = 0; index < 6; index += 1) {
+    const match = current.match(OPENCODE_INLINE_REASONING_SENTENCE_RE);
+    if (!match) {
+      break;
+    }
+    current = current.slice(match[0].length).trimStart();
+  }
+
+  return current;
+}
+
 export function sanitizeWechatFinalReplyText(
   adapter: BridgeAdapterKind,
   text: string,
 ): string {
-  const normalized = cleanupVisibleWechatReplyText(text);
+  const normalized =
+    adapter === "opencode"
+      ? cleanupVisibleWechatReplyText(stripInlineOpenCodeReasoningPrefix(text))
+      : cleanupVisibleWechatReplyText(text);
   if (!normalized || adapter !== "opencode") {
     return normalized;
   }
