@@ -36,7 +36,7 @@
 正式版本可以直接从 npm 安装：
 
 ```bash
-npm install -g @unlinearity/cli-wechat-bridge
+npm install -g @unlinearity/cli-wechat-bridge@latest
 ```
 
 安装后可在任意项目目录中直接使用 `wechat-codex-start`、`wechat-claude-start`、`wechat-opencode-start` 等命令。

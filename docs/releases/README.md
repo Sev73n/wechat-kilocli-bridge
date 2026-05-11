@@ -4,6 +4,14 @@
 
 ## 版本列表
 
+### [v1.0.3](./1.0.3.md) / [中文说明](./1.0.3_CN.md)
+**Codex 回复恢复 + OpenCode 新会话跟随** - 修复 Codex 已生成回答但未回传微信，以及 OpenCode 本地 `new` 后微信仍进入旧会话的问题
+- **Codex final reply 恢复**：app-server 状态不健康时仍可从 session 日志恢复 `task_complete` 与 `final_reply`
+- **OpenCode `/new`**：微信支持 `/new` / `/new-session`，并通过 companion 与 SDK 创建新 session
+- **本地 OpenCode session 跟随**：兼容无目录 `global-event session.created` 与多种 session 字段形态
+- **OpenCode 回复清洗**：防止 prompt 回显和同一行推理前缀污染微信回复
+- **统计**：13 个文件，新增 849 行，删除 26 行
+
 ### [v1.0.2](./1.0.2.md) / [中文说明](./1.0.2_CN.md)
 **npm 全局安装鉴权修复：首次扫码 + 过期会话恢复** - 全局 starter 命令现在会在前台处理缺失或过期的微信凭据
 - **前台扫码登录**：`wechat-codex-start` / `wechat-claude-start` / `wechat-opencode-start` 在打开 companion 前验证微信凭据
@@ -85,6 +93,7 @@
 
 | 版本 | 日期 | 说明 | 文件变更 |
 |------|------|------|---------|
+| 1.0.3 | 2026-05-11 | Codex final reply 恢复、OpenCode `/new` 与本地新会话跟随修复 | 13 个文件，+849/-26 |
 | 1.0.2 | 2026-05-11 | npm 全局安装后的微信首次鉴权、过期会话恢复与 setup 提示修复 | 12 个文件，+511/-126 |
 | 1.0.0 | 2026-05-10 | 稳定版、npm 上架准备、多适配器 companion、Codex 隔离与 Windows 可靠性 | 61 个文件，+12,252/-423 |
 | 0.9.0 | 2026-03-27 | 一键启动、生命周期治理、附件与状态同步修复 | 43 个文件，+5,515/-154 |
