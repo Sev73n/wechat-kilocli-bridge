@@ -29,6 +29,7 @@ import {
   shouldIgnoreCodexSessionReplayEntry,
   shouldRecoverCodexStaleBusyState,
 } from "../../src/bridge/bridge-adapters.ts";
+import { CodexPtyAdapter } from "../../src/bridge/bridge-adapters.codex.ts";
 import {
   ShellAdapter,
   ShellCommandRejectedError,
@@ -1522,6 +1523,87 @@ describe("shouldAutoCompleteCodexWechatTurnAfterFinalReply", () => {
 });
 
 describe("Codex panel completion recovery", () => {
+  test("polls a WeChat session completion while the app-server process is gone", async () => {
+    const home = makeTempDirectory();
+    process.env.HOME = home;
+    process.env.USERPROFILE = home;
+
+    const cwd = path.join(home, "project");
+    const threadId = "019e1505-1c23-7fb1-aee3-c24f89836864";
+    const turnId = "019e1505-4c13-74c0-9991-664bc4e60f04";
+    const sessionFilePath = path.join(
+      home,
+      ".codex",
+      "sessions",
+      "2026",
+      "05",
+      "11",
+      `rollout-2026-05-11T11-11-56-${threadId}.jsonl`,
+    );
+    writeTextFile(
+      sessionFilePath,
+      [
+        JSON.stringify({
+          timestamp: "2026-05-11T03:12:09.281Z",
+          type: "session_meta",
+          payload: {
+            id: threadId,
+            timestamp: "2026-05-11T03:11:56.963Z",
+            cwd,
+            source: "vscode",
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-11T03:12:13.770Z",
+          type: "event_msg",
+          payload: {
+            type: "task_complete",
+            turn_id: turnId,
+            last_agent_message: "done from session log",
+          },
+        }),
+        "",
+      ].join("\n"),
+    );
+
+    const adapter = new CodexPtyAdapter({
+      kind: "codex",
+      command: "codex",
+      cwd,
+      renderMode: "headless",
+    }) as any;
+    const events: Array<{ type: string; text?: string; status?: string }> = [];
+    adapter.setEventSink((event: { type: string; text?: string; status?: string }) =>
+      events.push(event),
+    );
+    adapter.sharedThreadId = threadId;
+    adapter.state.sharedThreadId = threadId;
+    adapter.state.sharedSessionId = threadId;
+    adapter.state.startedAt = "2026-05-11T03:11:56.732Z";
+    adapter.state.status = "busy";
+    adapter.activeTurn = {
+      threadId,
+      turnId,
+      origin: "wechat",
+    };
+    adapter.state.activeTurnId = turnId;
+    adapter.state.activeTurnOrigin = "wechat";
+    adapter.appServer = null;
+
+    await adapter.pollSessionLog();
+
+    expect(events.map((event) => event.type)).toEqual([
+      "status",
+      "final_reply",
+      "task_complete",
+    ]);
+    expect(events.find((event) => event.type === "final_reply")?.text).toBe(
+      "done from session log",
+    );
+    expect(adapter.activeTurn).toBeNull();
+    expect(adapter.state.status).toBe("idle");
+  });
+
   test("session task_complete clears the in-memory active turn and returns to idle", () => {
     const adapter = createBridgeAdapter({
       kind: "codex",

@@ -439,6 +439,16 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
     return this.isNativePanelMode() ? Boolean(this.nativeProcess) : Boolean(this.pty);
   }
 
+  private shouldPollSessionLog(): boolean {
+    return (
+      this.isCodexClientRunning() ||
+      this.pendingTurnStart ||
+      Boolean(this.activeTurn) ||
+      Boolean(this.state.activeTurnId) ||
+      Boolean(this.sessionFilePath)
+    );
+  }
+
   private async startNativeClient(): Promise<void> {
     this.setStatus("starting", `Starting ${this.options.kind} adapter...`);
 
@@ -596,7 +606,7 @@ export class CodexPtyAdapter extends AbstractPtyAdapter {
   }
 
   private async pollSessionLog(): Promise<void> {
-    if (!this.isCodexClientRunning()) {
+    if (!this.shouldPollSessionLog()) {
       return;
     }
 

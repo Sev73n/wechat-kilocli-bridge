@@ -68,6 +68,7 @@ type DeferredInboundMessage = {
 };
 
 type WechatSendContext =
+  | "final_reply"
   | "message"
   | "notice"
   | "approval_required"
@@ -912,12 +913,14 @@ function wireAdapterEvents(params: {
         }
         break;
       case "final_reply":
+        stateStore.appendLog(`final_reply: ${truncatePreview(event.text)}`);
         void outputBatcher.flushNow().then(async () => {
           await forwardWechatFinalReply({
             adapter: options.adapter,
             rawText: event.text,
             sender: {
-              sendText: (text) => queueWechatMessage(authorizedUserId, text),
+              sendText: (text) =>
+                queueWechatMessage(authorizedUserId, text, "final_reply"),
               sendImage: (imagePath) =>
                 queueWechatAttachmentAction(() =>
                   transport.sendImage(imagePath, { recipientId: authorizedUserId }),
