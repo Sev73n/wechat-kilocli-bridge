@@ -1,0 +1,6 @@
+node_modules/
+vendor/wechat-ilink-client/node_modules/
+vendor/wechat-ilink-client/dist/
+data/
+*.log
+.env
