@@ -4,3 +4,5 @@ vendor/wechat-ilink-client/dist/
 data/
 *.log
 .env
+kilo-settings.json
+.kilo/

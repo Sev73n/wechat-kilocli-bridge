@@ -10,7 +10,7 @@ import type { EventEmitter } from "node:events";
 import { SessionStore } from "./session-store.ts";
 import { Allowlist } from "./allowlist.ts";
 import { handleCommand } from "./commands.ts";
-import { runKilo, findKiloServer, startKiloServer } from "./kilo-runner.ts";
+import { runKilo, startKiloServer } from "./kilo-runner.ts";
 
 const DATA_DIR = path.resolve("data");
 const WORK_DIR = process.env.KILO_WORK_DIR ?? "/tmp/kilo-wechat-workspace";
@@ -89,9 +89,53 @@ type TypedEmitter = EventEmitter & {
   on(event: "error", listener: (err: Error) => void): TypedEmitter;
   on(event: "sessionExpired", listener: () => void): TypedEmitter;
   sendText(userId: string, text: string): Promise<void>;
+  getTypingTicket(userId: string, contextToken?: string): Promise<string>;
+  sendTyping(userId: string, typingTicket: string, status?: "typing" | "cancel"): Promise<void>;
   stop(): void;
   start(opts: { loadSyncBuf: () => string | undefined; saveSyncBuf: (buf: string) => void }): Promise<void>;
 };
+
+/**
+ * Start a typing-indicator keepalive loop. The server-side typing state
+ * expires roughly every 15s, so we re-send every 10s while kilo is thinking.
+ * Returns a stop() function; safe to call multiple times.
+ */
+function startTypingKeepalive(client: TypedEmitter, userId: string): () => void {
+  let stopped = false;
+  let cachedTicket: string | null = null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  const sendOnce = async () => {
+    if (stopped) return;
+    try {
+      if (!cachedTicket) {
+        cachedTicket = await client.getTypingTicket(userId);
+        if (!cachedTicket) {
+          console.warn("[typing] no ticket for", userId, "— giving up keepalive");
+          return;
+        }
+      }
+      if (stopped) return;
+      await client.sendTyping(userId, cachedTicket, "typing");
+    } catch (err) {
+      console.warn("[typing] send failed for", userId, ":", err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const loop = () => {
+    if (stopped) return;
+    void sendOnce().finally(() => {
+      if (stopped) return;
+      timer = setTimeout(loop, 10_000);
+    });
+  };
+  loop();
+
+  return () => {
+    stopped = true;
+    if (timer) { clearTimeout(timer); timer = null; }
+  };
+}
 
 async function main(): Promise<void> {
   let serverUrl: string;
@@ -102,16 +146,13 @@ async function main(): Promise<void> {
     serverUrl = envUrl;
     console.log("[bridge] Using KILO_SERVER_URL:", serverUrl);
   } else {
-    try {
-      serverUrl = await findKiloServer();
-      console.log("[bridge] Found existing Kilo server at", serverUrl);
-    } catch {
-      console.log("[bridge] No existing Kilo server found, starting one...");
-      const server = await startKiloServer();
-      serverUrl = server.url;
-      serverProc = server;
-      console.log("[bridge] Kilo server listening at", serverUrl);
-    }
+    // Always spawn our own kilo serve. Do NOT attach to existing servers
+    // (VS Code's kilo serves on 4096/random ports must not be touched).
+    console.log("[bridge] Starting dedicated kilo serve...");
+    const server = await startKiloServer();
+    serverUrl = server.url;
+    serverProc = server;
+    console.log("[bridge] Kilo server listening at", serverUrl);
   }
 
   let client: TypedEmitter | null = null;
@@ -189,27 +230,10 @@ async function main(): Promise<void> {
       const sid = store.getOrInit(from);
       console.log("[bridge] Running kilo for", from, "sid=", sid ?? "(new)");
 
-      let lastSentLen = 0;
-      let streamTimer: ReturnType<typeof setTimeout> | null = null;
-      const streamBuf: string[] = [];
-
-      const flushStream = async () => {
-        const full = streamBuf.join("");
-        const unsent = full.slice(lastSentLen);
-        if (!unsent) return;
-        lastSentLen = full.length;
-        for (const chunk of splitAt(unsent, 3500)) {
-          try { await client!.sendText(from, chunk); }
-          catch (e) { console.error("[bridge] sendText error:", e); }
-        }
-      };
-
-      const onText = (part: string) => {
-        streamBuf.push(part);
-        if (!streamTimer) {
-          streamTimer = setTimeout(() => { streamTimer = null; flushStream(); }, 3000);
-        }
-      };
+      // Keep "正在输入" alive while kilo thinks. WeChat typing state
+      // expires ~15s server-side; we re-send every 10s. The final sendText
+      // with state=FINISH closes it implicitly.
+      const stopTyping = startTypingKeepalive(client!, from);
 
       try {
         const result = await runKilo({
@@ -218,29 +242,30 @@ async function main(): Promise<void> {
           cwd: WORK_DIR,
           serverUrl,
           timeoutMs: 5 * 60_000,
-          onText,
         });
-
-        if (streamTimer) { clearTimeout(streamTimer); streamTimer = null; }
 
         if (!sid && result.sessionId) {
           store.set(from, result.sessionId);
+        } else if (sid) {
+          // Refresh the 24h activity window for this peer.
+          store.touch(from);
         }
 
-        const unsent = result.text.slice(lastSentLen);
-        if (unsent) {
-          for (const chunk of splitAt(unsent, 3500)) {
-            await client!.sendText(from, chunk);
-          }
-        } else if (streamBuf.length === 0) {
-          await client!.sendText(from, "(empty response)");
+        const reply = result.text.trim();
+        if (!reply) {
+          console.warn("[bridge] kilo returned empty text for", from, "— skipping send");
+          return;
+        }
+
+        for (const chunk of splitAt(reply, 3500)) {
+          await client!.sendText(from, chunk);
         }
       } catch (err: unknown) {
-        if (streamTimer) { clearTimeout(streamTimer); streamTimer = null; }
-        await flushStream();
         const errMsg = err instanceof Error ? err.message : String(err);
         console.error("[bridge] Kilo error:", errMsg);
         await client!.sendText(from, "Kilo error: " + errMsg.slice(0, 200));
+      } finally {
+        stopTyping();
       }
     });
   });

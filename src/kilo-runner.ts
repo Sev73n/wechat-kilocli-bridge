@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 
-const KILO_BIN = "/home/oc/.vscode-server/extensions/kilocode.kilo-code-7.3.0-linux-x64/bin/kilo";
+// Kilo CLI binary. Override with the KILO_BIN env var; otherwise fall back
+// to a "kilo" lookup on PATH (assumed installed globally via npm/pnpm).
+const KILO_BIN = process.env.KILO_BIN ?? "kilo";
 
 export interface KiloRunResult {
   sessionId: string;
@@ -91,15 +93,35 @@ export async function runKilo(opts: KiloRunOptions): Promise<KiloRunResult> {
         reject(new Error("Kilo exited with code " + code + ": " + stderrBuf.trim().slice(0, 300)));
         return;
       }
+      // Even with exit 0, an empty textParts indicates a silent failure
+      // (e.g. server unreachable, attach refused). Surface it loudly.
+      if (textParts.length === 0) {
+        const tail = stderrBuf.trim().slice(-300) || "(no stderr)";
+        reject(new Error("Kilo produced no output (exit " + code + "). stderr: " + tail));
+        return;
+      }
       resolve({
         sessionId,
         text: textParts.join(""),
       });
     });
 
-    proc.on("error", (err: Error) => {
+    proc.on("error", (err: Error & { code?: string }) => {
       clearTimeout(timer);
-      reject(err);
+      // If we already collected text before the spawn errored (e.g. server
+      // dropped the connection mid-stream), surface what we got instead of
+      // throwing away the partial reply.
+      if (textParts.length > 0) {
+        console.warn(
+          "[kilo-runner] spawn error but %d text parts already collected — resolving partial. err.name=%s code=%s msg=%s",
+          textParts.length, err.name, err.code ?? "(none)", err.message,
+        );
+        resolve({ sessionId, text: textParts.join("") });
+        return;
+      }
+      // Augment the error message with name/code for debugging.
+      const detail = "name=" + err.name + " code=" + (err.code ?? "(none)") + " msg=" + err.message;
+      reject(new Error("Kilo spawn error: " + detail));
     });
   });
 }
