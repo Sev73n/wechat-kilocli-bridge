@@ -1,0 +1,20 @@
+[Unit]
+Description=WeChat ClawBot <-> Kilo CLI Bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/cgteamwork/cgtw_out_disk/oc_docker/kilo-wechat-bridge
+Environment=NODE_ENV=production
+Environment=PATH=/home/oc/.nvm/versions/node/v22.22.3/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/home/oc/.nvm/versions/node/v22.22.3/bin/node --no-warnings --experimental-strip-types src/bridge/wechat-bridge.ts --adapter kilo
+Restart=always
+RestartSec=10
+KillMode=control-group
+TimeoutStopSec=20
+StandardOutput=append:/home/oc/.claude/channels/wechat/bridge.log
+StandardError=append:/home/oc/.claude/channels/wechat/bridge.log
+
+[Install]
+WantedBy=default.target
