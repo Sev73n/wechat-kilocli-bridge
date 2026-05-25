@@ -31,13 +31,12 @@ async function main(): Promise<void> {
   console.log(`Current version: v${versionInfo.current}\n`);
 
   console.log(`Update instructions:`);
-  console.log(`   cd CLI-WeChat-Bridge`);
+  console.log(`   cd wechat-kilocli-bridge`);
   console.log(`   git pull`);
-  console.log(`   bun install`);
-  console.log(`   npm install -g .\n`);
+  console.log(`   npm install\n`);
 
   console.log(`For more information:`);
-  console.log(`   https://github.com/UNLINEARITY/CLI-WeChat-Bridge/releases`);
+  console.log(`   http://git.73oc.local/73/wechat-kilocli-bridge`);
 }
 
 main().catch((error) => {

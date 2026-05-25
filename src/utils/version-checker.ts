@@ -186,12 +186,11 @@ export function formatUpdateMessage(versionInfo: VersionInfo): string {
 [Update Available] Version ${latest} is available (current: ${current})
 
 Update instructions:
-   cd CLI-WeChat-Bridge
+   cd wechat-kilocli-bridge
    git pull
-   bun install
-   npm install -g .
+   npm install
 
 For more information:
-   https://github.com/UNLINEARITY/CLI-WeChat-Bridge/releases
+   http://git.73oc.local/73/wechat-kilocli-bridge
 `;
 }

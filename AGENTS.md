@@ -1,35 +1,66 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
-`src/bridge` contains bridge lifecycle, adapter selection, approvals, and workspace state. `src/companion` holds local Codex, Claude, and OpenCode companion launchers plus IPC helpers. `src/wechat` handles setup, transport, and channel config. Shared CLI helpers live in `src/commands` and `src/utils`. Executable wrappers are in `bin/*.mjs`.
+## Project Overview
 
-Tests mirror the runtime areas: `test/bridge`, `test/companion`, and `test/wechat`. Docs, screenshots, and release notes live under `docs/`.
+This project bridges WeChat ClawBot to a local [Kilo Code CLI](https://kilo.ai) instance via `kilo serve` HTTP API. Messages from WeChat are forwarded to the local Kilo session; replies stream back to WeChat via iLink.
+
+The bridge runs as a **user-level systemd service** (`deploy/wechat-bridge.service`) with `--adapter kilo`.
+
+## Project Structure
+
+```
+src/
+├── bridge/          # Bridge lifecycle, adapter selection, approvals, workspace state
+├── companion/       # Local companion launchers and IPC helpers
+├── wechat/          # WeChat setup, iLink transport, channel config
+├── commands/        # CLI helpers (check-update)
+├── utils/           # Shared utilities (version-checker)
+├── media/           # Media type helpers
+└── runtime/         # Runtime type definitions
+bin/                 # Global CLI entry points (kilo-only)
+deploy/              # systemd service file and install script
+test/                # Tests mirroring src areas (bridge/, companion/, wechat/)
+```
+
+## Key Entry Points
+
+| File | Role |
+| --- | --- |
+| `src/bridge/wechat-bridge.ts` | Main bridge entry; run with `--adapter kilo` |
+| `src/bridge/bridge-adapters.ts` | Adapter factory; normalizes `kilo` → `opencode` internally |
+| `src/bridge/bridge-adapters.opencode.ts` | OpenCode/Kilo HTTP server adapter (shared impl) |
+| `src/companion/local-companion-start.ts` | One-shot launcher: starts bridge + opens local TUI |
+| `src/companion/local-companion.ts` | Local companion process (connects to bridge socket) |
+| `src/wechat/setup.ts` | WeChat QR login and credential init |
 
 ## Build, Test, and Development Commands
-`bun install` installs dependencies.
 
-`bun run setup` performs initial WeChat channel login.
+```bash
+npm run setup           # WeChat QR login
+npm run bridge:kilo     # Start bridge headless (server mode)
+npm run kilo:start      # Start bridge + open local Kilo TUI (desktop)
+npm run kilo:panel      # Open local Kilo TUI (bridge already running)
+npm run check           # Validate WeChat channel state, no service start
+npm test                # Run all tests
+npm run test:bridge
+npm run test:companion
+npm run test:wechat
+npm run build           # Compile TypeScript to dist/
+```
 
-`bun run bridge:codex`, `bun run bridge:claude`, and `bun run bridge:opencode` start adapter-specific bridges in the current workspace.
+## Coding Style
 
-`bun run codex:start`, `bun run claude:start`, and `bun run opencode:start` launch or reuse the local companion for the current folder.
+- TypeScript ESM with strict typing
+- 2-space indentation, semicolons, double quotes, explicit `.ts` import extensions
+- `camelCase` for functions/variables, `PascalCase` for classes/types, `kebab-case` filenames
+- Keep adapter-specific logic inside `bridge-adapters.*.ts`; avoid spreading conditionals
 
-`bun run check` validates channel state without starting the full service.
+## Testing
 
-`bun run test`, `bun run test:bridge`, `bun run test:companion`, `bun run test:wechat`, and `bun run test:watch` run the Bun test suites. There is no separate build step; the project runs TypeScript directly with Node 24 strip-types support.
+Tests use `bun:test`. Name files `*.test.ts`, place in `test/<area>/`. Cover bridge lifecycle changes, message formatting, workspace locking, and WeChat transport behavior.
 
-## Coding Style & Naming Conventions
-Use TypeScript ESM with strict typing. Match the existing style: 2-space indentation, semicolons, double quotes, and explicit `.ts` import extensions. Prefer `camelCase` for functions and variables, `PascalCase` for classes and types, and kebab-case filenames like `bridge-final-reply.ts`.
+## Security
 
-Keep adapter-specific logic inside the relevant `bridge-adapters.*.ts` or companion module instead of spreading conditionals elsewhere. No formatter or lint config is checked in, so keep edits small and consistent with nearby code.
-
-## Testing Guidelines
-Tests use `bun:test`. Name files `*.test.ts` and place them in the matching `test/<area>/` directory. Add focused regression coverage for bridge lifecycle changes, adapter-specific message formatting, workspace locking, and WeChat transport behavior. No numeric coverage gate is enforced, but fixes in these paths should ship with tests.
-
-## Commit & Pull Request Guidelines
-Recent commits follow Conventional Commit prefixes such as `fix:`, `feat:`, `refactor:`, and `docs:`. Keep subjects imperative and behavior-focused, for example: `fix: prevent bridge from exiting on transient companion disconnection`.
-
-Pull requests should summarize the affected adapter(s), describe the user-visible behavior change, and list the commands you ran. Include terminal screenshots or WeChat output snippets when changing approval prompts, onboarding, or message formatting.
-
-## Security & Configuration Tips
-Do not commit local credentials, bridge logs, or workspace state from `~/.claude/channels/wechat`. When adding configuration, document new environment variables alongside existing overrides such as `WECHAT_ILINK_BASE_URL` and `CLAUDE_WECHAT_CHANNEL_DATA_DIR`.
+- Do **not** commit credentials, bridge logs, or workspace state from `~/.claude/channels/wechat/`
+- `KILO_SERVER_PASSWORD` is auto-generated at runtime; never hardcode it
+- `.claude/` and `.kilo/` are gitignored
