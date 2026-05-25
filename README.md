@@ -113,14 +113,13 @@ journalctl --user -u wechat-bridge -f    # 实时日志
 ### 方式 B：直接启动（开发/调试）
 
 ```bash
-cd /your/project
 npm run bridge:kilo
 ```
 
 ### 方式 C：tmux 后台运行
 
 ```bash
-tmux new-session -d -s wechat-bridge "cd /your/project && npm run bridge:kilo"
+tmux new-session -d -s wechat-bridge "cd /cgteamwork/cgtw_out_disk/oc_docker/kilo-wechat-bridge && npm run bridge:kilo"
 tmux attach -t wechat-bridge   # 查看日志
 ```
 
@@ -129,9 +128,9 @@ tmux attach -t wechat-bridge   # 查看日志
 | 命令 | 说明 |
 | --- | --- |
 | `npm run setup` | 微信扫码登录 |
-| `npm run bridge:kilo` | 启动 Kilo bridge（无头模式）|
-| `npm run kilo:start` | 单命令启动（bridge + 本地 companion TUI）|
-| `npm run kilo:panel` | 仅启动 Kilo companion（需要 bridge 已运行）|
+| `npm run bridge:kilo` | 启动 Kilo bridge（无头/服务器模式，bridge 自管 kilo serve）|
+| `npm run kilo:start` | 启动 bridge 并打开可见的本地 Kilo companion TUI（桌面环境用）|
+| `npm run kilo:panel` | 仅打开本地 Kilo companion TUI（需要 bridge 已在运行）|
 | `npm run check` | 检查微信 channel 状态，不启动服务 |
 | `npm test` | 运行测试套件 |
 
@@ -167,6 +166,8 @@ tmux attach -t wechat-bridge   # 查看日志
 | `KILO_SERVER_PASSWORD` | Kilo HTTP Basic Auth 密码（不设则自动生成随机值）|
 | `WECHAT_MAX_IMAGE_MB` | 图片上传大小限制，默认 20 MB |
 | `WECHAT_MAX_FILE_MB` | 文件上传大小限制，默认 50 MB |
+| `WECHAT_MAX_VOICE_MB` | 语音上传大小限制，默认 20 MB |
+| `WECHAT_MAX_VIDEO_MB` | 视频上传大小限制，默认 100 MB |
 
 ## 常见问题
 
