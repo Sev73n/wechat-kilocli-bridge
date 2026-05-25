@@ -10,3 +10,5 @@ plan/
 architecture/
 git-log.md
 .worktrees/
+.kilo
+oc_gitea_skill/

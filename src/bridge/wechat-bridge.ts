@@ -22,6 +22,7 @@ import type {
   BridgeWorkerStatus,
   PendingApproval,
 } from "./bridge-types.ts";
+import { isOpenCodeKind } from "./bridge-types.ts";
 import {
   buildWechatInboundPrompt,
   buildOneTimeCode,
@@ -121,7 +122,7 @@ export function shouldForwardBridgeEventToWechat(
     text?: string;
   } = {},
 ): boolean {
-  if (adapter !== "opencode") {
+  if (!isOpenCodeKind(adapter)) {
     return true;
   }
 
@@ -151,12 +152,13 @@ export function formatUserFacingInboundError(params: {
   }
 
   if (
-    adapter === "opencode" &&
+    isOpenCodeKind(adapter) &&
     /opencode companion is not connected/i.test(errorText)
   ) {
+    const label = adapter === "kilo" ? "kilo" : "opencode";
     return cwd
-      ? `OpenCode companion is not connected for bridge workspace:\n${cwd}\nRun "wechat-opencode" in that directory to reconnect the current local terminal, or run "wechat-bridge-opencode" and then "wechat-opencode" in your target project to replace this bridge.`
-      : 'OpenCode companion is not connected. Start "wechat-opencode" in this directory to reconnect it, then retry.';
+      ? `${label === "kilo" ? "Kilo" : "OpenCode"} companion is not connected for bridge workspace:\n${cwd}\nRun "wechat-${label}" in that directory to reconnect the current local terminal, or run "wechat-bridge-${label}" and then "wechat-${label}" in your target project to replace this bridge.`
+      : `${label === "kilo" ? "Kilo" : "OpenCode"} companion is not connected. Start "wechat-${label}" in this directory to reconnect it, then retry.`;
   }
 
   return `Bridge error: ${errorText}`;
@@ -253,7 +255,7 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
 
     switch (arg) {
       case "--adapter":
-        if (!next || !["codex", "claude", "opencode", "shell"].includes(next)) {
+        if (!next || !["codex", "claude", "opencode", "kilo", "shell"].includes(next)) {
           throw new Error(`Invalid adapter: ${next ?? "(missing)"}`);
         }
         adapter = next as BridgeAdapterKind;
@@ -300,7 +302,7 @@ export function parseCliArgs(argv: string[]): BridgeCliOptions {
   }
 
   if (!adapter) {
-    throw new Error("Missing required --adapter <codex|claude|opencode|shell>");
+    throw new Error("Missing required --adapter <codex|claude|opencode|kilo|shell>");
   }
 
   const defaultCommand = resolveDefaultAdapterCommand(adapter);
@@ -368,12 +370,12 @@ async function main(): Promise<void> {
     log(`Reaped ${reapedPeerPids.length} stale bridge process(es): ${reapedPeerPids.join(", ")}`);
   }
 
-  if (options.adapter === "opencode") {
+  if (isOpenCodeKind(options.adapter)) {
     const reapedOpencodePids = await reapOrphanedOpencodeProcesses({
       logger: (message) => stateStore.appendLog(message),
     });
     if (reapedOpencodePids.length > 0) {
-      log(`Reaped ${reapedOpencodePids.length} orphaned opencode process(es): ${reapedOpencodePids.join(", ")}`);
+      log(`Reaped ${reapedOpencodePids.length} orphaned opencode/kilo process(es): ${reapedOpencodePids.join(", ")}`);
     }
   }
 
@@ -407,6 +409,27 @@ async function main(): Promise<void> {
   // Clear any stale endpoint left by a previous bridge for this workspace.
   // This prevents `wechat-*` companions from reconnecting to a dead bridge
   // while the new runtime is still starting up.
+
+  // Kilo CLI's `kilo serve` requires HTTP Basic auth using
+  // username "kilo" + password from KILO_SERVER_PASSWORD env. We generate
+  // a stable per-bridge password if one isn't already set (e.g. when launched
+  // from outside VS Code), forward it to the spawned server, and build the
+  // Authorization header the SDK will attach to every request.
+  let authHeader: string | undefined;
+  let extraServerEnv: Record<string, string> | undefined;
+  if (options.adapter === "kilo") {
+    let password = process.env.KILO_SERVER_PASSWORD;
+    if (!password) {
+      // 32-byte random hex, matches the format used by the VS Code extension.
+      password = (await import("node:crypto")).randomBytes(32).toString("hex");
+      // Persist into our own env so re-entries (companion, child reaper, etc.)
+      // see the same value.
+      process.env.KILO_SERVER_PASSWORD = password;
+    }
+    authHeader = "Basic " + Buffer.from(`kilo:${password}`).toString("base64");
+    extraServerEnv = { KILO_SERVER_PASSWORD: password };
+  }
+
   const adapter = createRuntimeHost({
     kind: options.adapter,
     command: options.command,
@@ -417,6 +440,8 @@ async function main(): Promise<void> {
       stateStore.getState().sharedSessionId ?? stateStore.getState().sharedThreadId,
     initialResumeConversationId: stateStore.getState().resumeConversationId,
     initialTranscriptPath: stateStore.getState().transcriptPath,
+    authHeader,
+    extraServerEnv,
   });
   const controller = new BridgeController(adapter, options.cwd);
   controller.clearLocalClientEndpoint();
@@ -503,6 +528,7 @@ async function main(): Promise<void> {
         options,
         stateStore,
         adapter,
+        transport,
       });
       activeTask = nextTask;
       lastHeartbeatAt = 0;
@@ -685,6 +711,10 @@ async function main(): Promise<void> {
       log(
         'Start the visible OpenCode companion in a second terminal with: wechat-opencode',
       );
+    } else if (options.adapter === "kilo") {
+      log(
+        'Start the visible Kilo companion in a second terminal with: wechat-kilo',
+      );
     } else if (options.adapter === "claude") {
       log(
         'Start the visible Claude companion in a second terminal with: wechat-claude',
@@ -760,6 +790,7 @@ async function main(): Promise<void> {
             options,
             stateStore,
             adapter,
+            transport,
             queueWechatMessage,
             outputBatcher,
             deferInboundMessage: async (nextMessage) => {
@@ -1097,6 +1128,7 @@ async function handleInboundMessage(params: {
   options: BridgeCliOptions;
   stateStore: BridgeStateStore;
   adapter: BridgeAdapter;
+  transport: WeChatTransport;
   queueWechatMessage: (
     senderId: string,
     text: string,
@@ -1150,10 +1182,11 @@ async function handleInboundMessage(params: {
         );
         return null;
       }
-      if (options.adapter === "opencode") {
+      if (isOpenCodeKind(options.adapter)) {
+        const label = options.adapter === "kilo" ? "kilo" : "opencode";
         await queueWechatMessage(
           message.senderId,
-          'WeChat /resume is disabled in opencode mode. Use /resume directly inside "wechat-opencode"; WeChat will follow the active local session.',
+          `WeChat /resume is disabled in ${label} mode. Use /resume directly inside "wechat-${label}"; WeChat will follow the active local session.`,
         );
         return null;
       }
@@ -1270,13 +1303,17 @@ async function handleInboundMessage(params: {
 
   if (adapterState.status === "busy") {
     if (
-      (options.adapter === "codex" || options.adapter === "opencode") &&
+      (options.adapter === "codex" || isOpenCodeKind(options.adapter)) &&
       adapterState.activeTurnOrigin === "local"
     ) {
       await queueWechatMessage(
         message.senderId,
         `${
-          options.adapter === "opencode" ? "OpenCode" : "codex"
+          options.adapter === "kilo"
+            ? "Kilo"
+            : options.adapter === "opencode"
+              ? "OpenCode"
+              : "codex"
         } is currently busy with a local terminal turn. Wait for it to finish or use /stop.`,
       );
       return null;
@@ -1294,6 +1331,7 @@ async function handleInboundMessage(params: {
     options,
     stateStore,
     adapter,
+    transport: params.transport,
   });
 }
 
@@ -1302,13 +1340,22 @@ async function dispatchInboundWechatText(params: {
   options: BridgeCliOptions;
   stateStore: BridgeStateStore;
   adapter: BridgeAdapter;
+  transport: WeChatTransport;
 }): Promise<ActiveTask> {
-  const { message, options, stateStore, adapter } = params;
+  const { message, options, stateStore, adapter, transport } = params;
   const activeTask = {
     startedAt: Date.now(),
     inputPreview: truncatePreview(message.text, 180),
   };
   stateStore.appendLog(`Forwarded input to ${options.adapter}: ${truncatePreview(message.text)}`);
+
+  // Start a repeating "typing" indicator. It will keep refreshing every
+  // ~10 seconds until `transport.sendText` finishes (which calls
+  // stopTypingKeepalive). This prevents ClawBot from inserting
+  // "(empty response)" placeholders when the bot takes longer than ~15s
+  // to respond.
+  transport.startTypingKeepalive(message.senderId);
+
   await adapter.sendInput(buildWechatInboundPrompt(message.text));
   return activeTask;
 }

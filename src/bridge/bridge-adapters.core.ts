@@ -23,6 +23,7 @@ import type {
   BridgeLifecycleMode,
   BridgeResumeSessionCandidate,
 } from "./bridge-types.ts";
+import { isOpenCodeKind } from "./bridge-types.ts";
 import {
   detectCliApproval,
   normalizeOutput,
@@ -76,11 +77,11 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
       profile: options.profile,
       sharedSessionId: options.initialSharedSessionId ?? options.initialSharedThreadId,
       sharedThreadId:
-        options.kind === "codex" || options.kind === "opencode"
+        options.kind === "codex" || isOpenCodeKind(options.kind)
           ? options.initialSharedSessionId ?? options.initialSharedThreadId
           : undefined,
       activeRuntimeSessionId:
-        options.kind === "claude" || options.kind === "opencode"
+        options.kind === "claude" || isOpenCodeKind(options.kind)
           ? options.initialSharedSessionId ?? options.initialSharedThreadId
           : undefined,
       resumeConversationId:
@@ -312,7 +313,7 @@ export class LocalCompanionProxyAdapter implements BridgeAdapter {
           ) {
             this.endpoint.sharedSessionId = nextSessionId;
             this.endpoint.sharedThreadId =
-              this.options.kind === "codex" || this.options.kind === "opencode" ? nextSessionId : undefined;
+              this.options.kind === "codex" || isOpenCodeKind(this.options.kind) ? nextSessionId : undefined;
             this.endpoint.resumeConversationId = message.state.resumeConversationId;
             this.endpoint.transcriptPath = message.state.transcriptPath;
           }

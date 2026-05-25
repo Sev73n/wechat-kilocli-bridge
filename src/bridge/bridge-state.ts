@@ -120,6 +120,7 @@ export function normalizeBridgeLockPayload(value: unknown): BridgeLockPayload | 
     record.adapter === "codex" ||
     record.adapter === "claude" ||
     record.adapter === "opencode" ||
+    record.adapter === "kilo" ||
     record.adapter === "shell"
       ? record.adapter
       : null;

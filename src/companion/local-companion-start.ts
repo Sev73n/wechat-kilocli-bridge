@@ -189,7 +189,7 @@ export function parseCliArgs(argv: string[]): LocalCompanionStartCliOptions {
     }
 
     if (arg === "--adapter") {
-      if (!next || !["codex", "claude", "opencode"].includes(next)) {
+      if (!next || !["codex", "claude", "opencode", "kilo"].includes(next)) {
         throw new Error(`Invalid adapter: ${next ?? "(missing)"}`);
       }
       adapter = next as LocalCompanionLaunchAdapter;

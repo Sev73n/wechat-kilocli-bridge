@@ -285,7 +285,7 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       await this.checkHealth();
       await this.initializeSessions();
       this.startSseListener();
-      if (this.options.renderMode === "companion") {
+      if (this.options.renderMode === "companion" && !this.options.skipNativeClient) {
         await this.startNativeClient();
         await this.syncVisibleSessionToShared({ force: true });
       } else {
@@ -540,7 +540,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   /* ---- Server management ---- */
 
   private async startServerProcess(): Promise<void> {
-    const env = buildCliEnvironment(this.options.kind);
+    const env = {
+      ...buildCliEnvironment(this.options.kind),
+      ...(this.options.extraServerEnv ?? {}),
+    };
     const serverArgs = [
       "serve",
       "--port",
@@ -602,7 +605,10 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
       return;
     }
 
-    const env = buildCliEnvironment(this.options.kind);
+    const env = {
+      ...buildCliEnvironment(this.options.kind),
+      ...(this.options.extraServerEnv ?? {}),
+    };
     const attachArgs = await this.buildNativeAttachArgs();
     const target = resolveSpawnTarget(this.options.command, this.options.kind, { env });
     const startedAt = nowIso();
@@ -663,11 +669,15 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
   private async createSdkClient(): Promise<void> {
     try {
       const { createOpencodeClient } = await import("@opencode-ai/sdk/v2");
-      this.client = createOpencodeClient({
+      const sdkOptions: Record<string, unknown> = {
         baseUrl: `http://${OPENCODE_SERVER_HOST}:${this.serverPort}`,
         directory: this.options.cwd,
         experimental_workspaceID: this.activeWorkspaceId ?? undefined,
-      }) as unknown as OpenCodeSdkClient;
+      };
+      if (this.options.authHeader) {
+        sdkOptions.headers = { Authorization: this.options.authHeader };
+      }
+      this.client = createOpencodeClient(sdkOptions as never) as unknown as OpenCodeSdkClient;
     } catch (err) {
       throw new Error(
         `Failed to load @opencode-ai/sdk. Make sure it is installed: ${describeUnknownError(err)}`,
@@ -677,7 +687,11 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
   private async checkHealth(): Promise<void> {
     const baseUrl = `http://${OPENCODE_SERVER_HOST}:${this.serverPort}`;
-    const response = await fetch(`${baseUrl}/session/status`);
+    const headers: Record<string, string> = {};
+    if (this.options.authHeader) {
+      headers.Authorization = this.options.authHeader;
+    }
+    const response = await fetch(`${baseUrl}/session/status`, { headers });
     if (!response.ok) {
       throw new Error(`OpenCode health check failed (HTTP ${response.status}).`);
     }
@@ -1058,8 +1072,30 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
       void this.outputBatcher.flushNow()
         .catch(() => undefined)
-        .then(() => {
-          const summary = this.outputBatcher.getRecentSummary(500);
+        .then(async () => {
+          // Final reply text: prefer the **authoritative** assistant text from
+          // the server (last assistant message of the active session). This
+          // avoids three classes of bugs:
+          //   - `outputBatcher.getRecentSummary(500)` silently truncates long
+          //     replies (Markdown tables, multi-paragraph answers).
+          //   - The SSE stream sometimes emits a partial snapshot first, then
+          //     the working-notice + the real reply in two batches, so the
+          //     batcher sends an "(empty response)" placeholder before the
+          //     real text.
+          //   - `emittedTextByPartId` accumulates across turns and may include
+          //     leftover user prompt text.
+          let summary = "";
+          try {
+            summary = await this.fetchFinalAssistantText();
+          } catch (err) {
+            this.logDebug(
+              `[opencode-adapter:final_reply] fetch failed: ${describeUnknownError(err)}`,
+            );
+          }
+          if (!summary) {
+            // Fallback to the streaming buffer when the HTTP fetch fails.
+            summary = this.outputBatcher.getRecentSummary(2000);
+          }
           this.setStatus("idle");
           if (summary && summary !== "(no output)") {
             this.emit({
@@ -2444,6 +2480,65 @@ export class OpenCodeServerAdapter implements BridgeAdapter {
 
     this.observedUserTextByPartId.set(partId, `${previousText}${nextChunk}`);
     return nextChunk;
+  }
+
+  /**
+   * Fetch the full text of the latest assistant message for the active
+   * session directly from the kilo HTTP server. This is the authoritative
+   * source of truth and is used to produce a clean `final_reply` text after
+   * a turn completes (`session.idle`), instead of reconstructing it from
+   * the SSE stream which is prone to ordering races and silent truncation.
+   */
+  private async fetchFinalAssistantText(): Promise<string> {
+    const sessionId = this.activeSessionId;
+    if (!sessionId) {
+      return "";
+    }
+
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (this.options.authHeader) {
+      headers.Authorization = this.options.authHeader;
+    }
+    const url = `${this.getServerUrl()}/session/${encodeURIComponent(sessionId)}/message`;
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      throw new Error(`HTTP ${response.status} from ${url}`);
+    }
+
+    const raw = (await response.json()) as unknown;
+    if (!Array.isArray(raw)) {
+      return "";
+    }
+
+    // Find the latest message whose info.role === "assistant".
+    let latest: { info?: { role?: string; time?: { created?: number } }; parts?: unknown } | null = null;
+    let latestTime = -Infinity;
+    for (const item of raw) {
+      if (!isRecord(item)) continue;
+      const info = isRecord(item.info) ? item.info : undefined;
+      if (info?.role !== "assistant") continue;
+      const created = isRecord(info.time) && typeof info.time.created === "number"
+        ? info.time.created
+        : 0;
+      if (created >= latestTime) {
+        latestTime = created;
+        latest = item as never;
+      }
+    }
+    if (!latest) {
+      return "";
+    }
+
+    // Concatenate every text part. Reasoning / step markers are ignored.
+    const parts = Array.isArray(latest.parts) ? latest.parts : [];
+    const chunks: string[] = [];
+    for (const p of parts) {
+      if (!isRecord(p)) continue;
+      if (p.type !== "text") continue;
+      const t = typeof p.text === "string" ? p.text : "";
+      if (t) chunks.push(t);
+    }
+    return chunks.join("").trim();
   }
 
   private pushVisibleOutput(text: string): void {

@@ -16,6 +16,11 @@ import type {
   PendingUserInputRequest,
   UserInputRequestQuestion,
 } from "./bridge-types.ts";
+import { isOpenCodeKind } from "./bridge-types.ts";
+
+function opencodeLabel(adapter: BridgeAdapterKind | string): string {
+  return adapter === "kilo" ? "Kilo" : "OpenCode";
+}
 
 const ANSI_ESCAPE_RE =
   // eslint-disable-next-line no-control-regex
@@ -815,18 +820,19 @@ export function formatSessionSwitchMessage(params: {
     }
   }
 
-  if (params.adapter === "opencode") {
+  if (isOpenCodeKind(params.adapter)) {
+    const lbl = opencodeLabel(params.adapter);
     switch (params.reason) {
       case "local_follow":
       case "local_session_fallback":
       case "local_turn":
-        return `OpenCode session switched to ${shortSessionId} from the local terminal.`;
+        return `${lbl} session switched to ${shortSessionId} from the local terminal.`;
       case "wechat_resume":
-        return `OpenCode session switched to ${shortSessionId} from WeChat.`;
+        return `${lbl} session switched to ${shortSessionId} from WeChat.`;
       case "startup_restore":
-        return `OpenCode restored shared session ${shortSessionId} on startup.`;
+        return `${lbl} restored shared session ${shortSessionId} on startup.`;
       default:
-        return `OpenCode session switched to ${shortSessionId}.`;
+        return `${lbl} session switched to ${shortSessionId}.`;
     }
   }
 
@@ -866,12 +872,17 @@ export function formatResumeSessionList(params: {
   if (candidates.length === 0) {
     return adapter === "codex"
       ? "No saved Codex threads were found for this working directory."
-      : adapter === "opencode"
-        ? "No saved OpenCode sessions were found for this working directory."
+      : isOpenCodeKind(adapter)
+        ? `No saved ${opencodeLabel(adapter)} sessions were found for this working directory.`
         : "No saved sessions were found for this working directory.";
   }
 
-  const title = adapter === "codex" ? "Recent Codex threads:" : adapter === "opencode" ? "Recent OpenCode sessions:" : "Recent sessions:";
+  const title =
+    adapter === "codex"
+      ? "Recent Codex threads:"
+      : isOpenCodeKind(adapter)
+        ? `Recent ${opencodeLabel(adapter)} sessions:`
+        : "Recent sessions:";
   const resumeTargetLabel = adapter === "codex" ? "threadId" : "sessionId";
   return [
     title,
@@ -908,8 +919,8 @@ export function formatMirroredUserInputMessage(
       ? "Local Codex input"
       : adapter === "claude"
         ? "Local Claude input"
-        : adapter === "opencode"
-          ? "Local OpenCode input"
+        : isOpenCodeKind(adapter)
+          ? `Local ${opencodeLabel(adapter)} input`
           : "Local input";
   return `${label}:\n${truncatePreview(text, 500)}`;
 }
@@ -918,11 +929,17 @@ export function formatFinalReplyMessage(
   adapter: BridgeAdapterKind,
   text: string,
 ): string {
-  if (adapter === "claude" || adapter === "codex" || adapter === "opencode") {
+  if (adapter === "claude" || adapter === "codex" || isOpenCodeKind(adapter)) {
     return text;
   }
   // After the early return above, only "shell" remains.
-  const label = (adapter as string) === "codex" ? "Codex" : (adapter as string) === "claude" ? "Claude" : (adapter as string) === "opencode" ? "OpenCode" : adapter;
+  const label = (adapter as string) === "codex"
+    ? "Codex"
+    : (adapter as string) === "claude"
+      ? "Claude"
+      : isOpenCodeKind(adapter as BridgeAdapterKind)
+        ? opencodeLabel(adapter)
+        : adapter;
   return `${label} final reply:\n${text}`;
 }
 
@@ -981,10 +998,10 @@ export function sanitizeWechatFinalReplyText(
   text: string,
 ): string {
   const normalized =
-    adapter === "opencode"
+    isOpenCodeKind(adapter)
       ? cleanupVisibleWechatReplyText(stripInlineOpenCodeReasoningPrefix(text))
       : cleanupVisibleWechatReplyText(text);
-  if (!normalized || adapter !== "opencode") {
+  if (!normalized || !isOpenCodeKind(adapter)) {
     return normalized;
   }
 
@@ -1168,7 +1185,14 @@ export function formatTaskFailedMessage(
   adapter: BridgeAdapterKind,
   text: string,
 ): string {
-  const label = adapter === "codex" ? "Codex" : adapter === "claude" ? "Claude" : adapter === "opencode" ? "OpenCode" : adapter;
+  const label =
+    adapter === "codex"
+      ? "Codex"
+      : adapter === "claude"
+        ? "Claude"
+        : isOpenCodeKind(adapter)
+          ? opencodeLabel(adapter)
+          : adapter;
   return `${label} task failed:\n${text}`;
 }
 

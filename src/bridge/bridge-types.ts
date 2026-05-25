@@ -1,4 +1,17 @@
-export type BridgeAdapterKind = "codex" | "claude" | "opencode" | "shell";
+export type BridgeAdapterKind = "codex" | "claude" | "opencode" | "kilo" | "shell";
+
+/**
+ * Kilo is a fork of OpenCode that shares the same HTTP server protocol,
+ * session model, SSE events and SDK shape. Every code path that special-cases
+ * `opencode` should treat `kilo` identically — use this helper to keep that
+ * intent explicit at every call site.
+ */
+export function isOpenCodeKind(
+  kind: BridgeAdapterKind | string | undefined | null,
+): boolean {
+  return kind === "opencode" || kind === "kilo";
+}
+
 export type BridgeLifecycleMode = "persistent" | "companion_bound";
 export type BridgeTurnOrigin = "wechat" | "local";
 export type BridgeSessionSwitchSource = BridgeTurnOrigin | "restore";

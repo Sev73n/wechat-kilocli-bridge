@@ -66,6 +66,25 @@ export type AdapterOptions = {
   initialResumeConversationId?: string;
   initialTranscriptPath?: string;
   renderMode?: "embedded" | "panel" | "companion" | "headless";
+  /**
+   * Optional `Authorization` header value (e.g. "Basic base64(user:password)")
+   * to attach to every SDK call. Used by the kilo adapter to talk to a
+   * `kilo serve` instance that requires basic auth.
+   */
+  authHeader?: string;
+  /**
+   * Extra environment variables to pass to the spawned `<bin> serve` (and
+   * any companion native process). Used to forward `KILO_SERVER_PASSWORD`
+   * so the spawned server inherits a stable, predictable password.
+   */
+  extraServerEnv?: Record<string, string>;
+  /**
+   * When `true` and the adapter is `OpenCodeServerAdapter`-shaped
+   * (renderMode === "companion"), skip launching the visible native TUI
+   * (`kilo attach …`). Used by the kilo bridge running headless on a remote
+   * box where no terminal is available for the local companion.
+   */
+  skipNativeClient?: boolean;
 };
 
 export type EventSink = (event: BridgeEvent) => void;
@@ -260,6 +279,8 @@ export function getLocalCompanionCommandName(kind: BridgeAdapterKind): string {
       return "wechat-claude";
     case "opencode":
       return "wechat-opencode";
+    case "kilo":
+      return "wechat-kilo";
     default:
       return "local companion";
   }
@@ -948,7 +969,7 @@ export function buildCliEnvironment(
   const sourceEnv = options.env ?? (process.env as Record<string, string | undefined>);
   const platform = options.platform ?? process.platform;
 
-  if (kind === "codex" || kind === "claude" || kind === "opencode") {
+  if (kind === "codex" || kind === "claude" || kind === "opencode" || kind === "kilo") {
     if (platform !== "win32") {
       return applyLoopbackNoProxy({
         ...copyDefinedEnv(sourceEnv),
@@ -1616,7 +1637,10 @@ export function resolveSpawnTarget(
   }
 
   const resolved = resolveCommandPath(trimmed, platform, env) ?? trimmed;
-  if (platform !== "win32" || (kind !== "codex" && kind !== "claude" && kind !== "opencode")) {
+  if (
+    platform !== "win32" ||
+    (kind !== "codex" && kind !== "claude" && kind !== "opencode" && kind !== "kilo")
+  ) {
     return { file: resolved, args: [...forwardArgs] };
   }
 

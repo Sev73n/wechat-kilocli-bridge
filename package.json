@@ -1,7 +1,7 @@
 {
-  "name": "@unlinearity/cli-wechat-bridge",
-  "version": "1.0.3",
-  "description": "CLI WeChat Bridge for Codex, Claude Code, OpenCode, and PowerShell over WeChat",
+  "name": "@73/kilo-wechat-bridge",
+  "version": "0.1.0",
+  "description": "Bridge WeChat ClawBot to a local Kilo CLI (kilo serve) — fork of UNLINEARITY/CLI-WeChat-Bridge",
   "type": "module",
   "files": [
     "bin/",
@@ -13,24 +13,18 @@
     "wechat",
     "cli",
     "bridge",
-    "codex",
-    "claude",
+    "kilo",
+    "kilocode",
     "opencode",
     "terminal"
   ],
-  "author": "UNLINEARITY",
+  "author": "73 <73@oc.com>",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/UNLINEARITY/CLI-WeChat-Bridge.git"
+    "url": "http://git.73oc.local/73/CLI-WeChat-Bridge.git"
   },
-  "bugs": {
-    "url": "https://github.com/UNLINEARITY/CLI-WeChat-Bridge/issues"
-  },
-  "homepage": "https://github.com/UNLINEARITY/CLI-WeChat-Bridge#readme",
-  "publishConfig": {
-    "access": "public"
-  },
+  "private": true,
   "bin": {
     "wechat-bridge": "bin/wechat-bridge.mjs",
     "wechat-bridge-codex": "bin/wechat-bridge-codex.mjs",
@@ -43,6 +37,9 @@
     "wechat-bridge-opencode": "bin/wechat-bridge-opencode.mjs",
     "wechat-opencode": "bin/wechat-opencode.mjs",
     "wechat-opencode-start": "bin/wechat-opencode-start.mjs",
+    "wechat-bridge-kilo": "bin/wechat-bridge-kilo.mjs",
+    "wechat-kilo": "bin/wechat-kilo.mjs",
+    "wechat-kilo-start": "bin/wechat-kilo-start.mjs",
     "wechat-setup": "bin/wechat-setup.mjs",
     "wechat-check-update": "bin/wechat-check-update.mjs"
   },
@@ -64,6 +61,9 @@
     "bridge:opencode": "node --no-warnings --experimental-strip-types src/bridge/wechat-bridge.ts --adapter opencode",
     "opencode:panel": "node --no-warnings --experimental-strip-types src/companion/local-companion.ts --adapter opencode",
     "opencode:start": "node --no-warnings --experimental-strip-types src/companion/local-companion-start.ts --adapter opencode",
+    "bridge:kilo": "node --no-warnings --experimental-strip-types src/bridge/wechat-bridge.ts --adapter kilo",
+    "kilo:panel": "node --no-warnings --experimental-strip-types src/companion/local-companion.ts --adapter kilo",
+    "kilo:start": "node --no-warnings --experimental-strip-types src/companion/local-companion-start.ts --adapter kilo",
     "bridge:bun": "bun src/bridge/wechat-bridge.ts",
     "test": "bun test test",
     "test:bridge": "bun test test/bridge",
@@ -84,7 +84,6 @@
     "typescript": "^6.0.2"
   },
   "engines": {
-    "bun": ">=1.0.0",
-    "node": ">=24.0.0"
+    "node": ">=22.0.0"
   }
 }

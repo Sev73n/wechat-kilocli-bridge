@@ -783,6 +783,12 @@ export class WeChatTransport {
   private readonly contextTokenCache = new Map<string, string>(
     Object.entries(readJsonFile<ContextTokenState>(CONTEXT_CACHE_FILE) ?? {}),
   );
+  /** Per-recipient repeating typing=1 keepalive timer. Started by
+   *  `startTypingKeepalive(senderId)` and stopped by `stopTypingKeepalive`
+   *  (which also issues a typing=2 cancel). Used to prevent ClawBot from
+   *  inserting "(empty response)" placeholders when an AI reply takes
+   *  longer than the server's typing timeout (~15-20s). */
+  private readonly typingKeepaliveTimers = new Map<string, NodeJS.Timeout>();
   private syncBuffer = "";
 
   constructor(logger: TransportLogger) {
@@ -928,6 +934,12 @@ export class WeChatTransport {
       trimmed,
       resolved.contextToken,
     );
+
+    // Stop the typing keepalive started in dispatchInboundWechatText and
+    // tell the server we're done. Without this the typing indicator can
+    // outlive the real reply and ClawBot will render "(empty response)"
+    // either before or after the message.
+    this.stopTypingKeepalive(resolved.recipientId);
   }
 
   async sendNotification(message: string, recipientId?: string): Promise<string> {
@@ -1122,9 +1134,134 @@ export class WeChatTransport {
       return;
     }
 
+    if (process.env.WECHAT_DEBUG_SEND === "1") {
+      try {
+        this.logger?.log(
+          `[wechat-send] to=${recipientId} bytes=${Buffer.byteLength(trimmed, "utf8")} preview=${JSON.stringify(trimmed.slice(0, 120))}`,
+        );
+      } catch {
+        // best effort
+      }
+    }
+
     await this.sendMessage(account, recipientId, contextToken, [
       { type: MSG_ITEM_TEXT, text_item: { text: trimmed } },
     ]);
+  }
+
+  /**
+   * Best-effort: tell the iLink server we're "typing" so the user-visible
+   * chat doesn't get a "(empty response)" placeholder while the model is
+   * still thinking. This is what weclaw does too — and not doing it is the
+   * reason every long reply gets prefixed with an "(empty response)" stub
+   * in the WeChat chat window.
+   *
+   * The flow is:
+   *   1. POST /ilink/bot/getconfig    → fetch a `typing_ticket`
+   *   2. POST /ilink/bot/sendtyping   with status=1 ("typing") or
+   *                                                status=2 ("cancel")
+   *
+   * Errors are swallowed: failing to send a typing indicator must never
+   * abort the real reply path.
+   *
+   * @param status 1 = typing (default), 2 = cancel
+   */
+  async sendTypingIndicator(recipientId: string, status: 1 | 2 = 1): Promise<void> {
+    const account = this.getCredentials();
+    if (!account || !recipientId) {
+      return;
+    }
+    try {
+      const configResp = await apiFetch({
+        baseUrl: account.baseUrl,
+        endpoint: "ilink/bot/getconfig",
+        body: JSON.stringify({
+          ilink_user_id: recipientId,
+          context_token: this.contextTokenCache.get(recipientId) ?? "",
+          base_info: { channel_version: CHANNEL_VERSION },
+        }),
+        token: account.token,
+        timeoutMs: 10_000,
+      });
+      const parsedConfig = JSON.parse(configResp) as {
+        typing_ticket?: string;
+        errcode?: number;
+        ret?: number;
+      };
+      const ticket = parsedConfig.typing_ticket;
+      if (!ticket) {
+        if (process.env.WECHAT_DEBUG_SEND === "1") {
+          this.logger?.log(
+            `[wechat-typing] getconfig returned no typing_ticket for ${recipientId} (errcode=${parsedConfig.errcode ?? "?"})`,
+          );
+        }
+        return;
+      }
+
+      await apiFetch({
+        baseUrl: account.baseUrl,
+        endpoint: "ilink/bot/sendtyping",
+        body: JSON.stringify({
+          ilink_user_id: recipientId,
+          typing_ticket: ticket,
+          status,
+          base_info: { channel_version: CHANNEL_VERSION },
+        }),
+        token: account.token,
+        timeoutMs: 10_000,
+      });
+
+      if (process.env.WECHAT_DEBUG_SEND === "1") {
+        this.logger?.log(
+          `[wechat-typing] sent typing=${status} to ${recipientId} ticket=${ticket.slice(0, 12)}…`,
+        );
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.logger?.log(
+        `[wechat-typing] failed for ${recipientId}: ${message.slice(0, 200)}`,
+      );
+    }
+  }
+
+  /**
+   * Start a repeating typing=1 indicator for `recipientId`. We send one
+   * immediately and then re-send every ~10 seconds until
+   * `stopTypingKeepalive(recipientId)` is called. This prevents the
+   * ClawBot platform from timing out the typing state (which causes it
+   * to display "(empty response)" while the bot is still thinking).
+   *
+   * Calling `start` while a timer already exists is a no-op (we just
+   * fire one more immediate ping to refresh the state).
+   */
+  startTypingKeepalive(recipientId: string): void {
+    if (!recipientId) return;
+    // Fire one immediately so the indicator appears ASAP.
+    void this.sendTypingIndicator(recipientId, 1);
+    if (this.typingKeepaliveTimers.has(recipientId)) {
+      return;
+    }
+    // 10s interval is well under the empirically-observed ~15-20s
+    // server-side typing timeout.
+    const handle = setInterval(() => {
+      void this.sendTypingIndicator(recipientId, 1);
+    }, 10_000);
+    handle.unref?.();
+    this.typingKeepaliveTimers.set(recipientId, handle);
+  }
+
+  /**
+   * Stop the typing keepalive for `recipientId` and tell the server we're
+   * done (typing=2). Safe to call when no keepalive is active.
+   */
+  stopTypingKeepalive(recipientId: string): void {
+    if (!recipientId) return;
+    const handle = this.typingKeepaliveTimers.get(recipientId);
+    if (handle) {
+      clearInterval(handle);
+      this.typingKeepaliveTimers.delete(recipientId);
+    }
+    void this.sendTypingIndicator(recipientId, 2);
   }
 
   private async sendMessage(
@@ -1133,12 +1270,17 @@ export class WeChatTransport {
     contextToken: string,
     itemList: unknown[],
   ): Promise<void> {
-    await apiFetch({
+    const responseText = await apiFetch({
       baseUrl: account.baseUrl,
       endpoint: "ilink/bot/sendmessage",
       body: JSON.stringify({
         msg: {
-          from_user_id: "",
+          // iLink requires a non-empty from_user_id (the bot's own iLink id).
+          // weclaw uses `client.BotID()` (== creds.ILinkBotID == our
+          // `account.accountId`). If we send an empty string the server
+          // accepts the call but the recipient's chat is rendered as
+          // "(empty response)" before our real reply lands.
+          from_user_id: account.accountId,
           to_user_id: recipientId,
           client_id: this.generateClientId(),
           message_type: MSG_TYPE_BOT,
@@ -1151,6 +1293,41 @@ export class WeChatTransport {
       token: account.token,
       timeoutMs: SEND_TIMEOUT_MS,
     });
+
+    if (process.env.WECHAT_DEBUG_SEND === "1") {
+      try {
+        this.logger?.log(
+          `[wechat-send-resp] to=${recipientId} ctx=${contextToken.slice(0, 16)} bytes=${responseText.length} body=${responseText.slice(0, 600)}`,
+        );
+      } catch {
+        // best effort
+      }
+    }
+
+    // iLink commonly returns HTTP 200 with `{ errcode: non-zero, errmsg }`
+    // on logical failures. The original opencode-tuned bridge happens to
+    // not check this, but some failure paths (e.g. expired context token,
+    // recipient-side rate limiting, server-side reply rejection) only show
+    // up here. When the platform fails to deliver to the recipient it
+    // sometimes substitutes "(empty response)" in the user-visible chat.
+    try {
+      const parsed = JSON.parse(responseText) as { errcode?: number; errmsg?: string; ret?: number };
+      if (
+        (typeof parsed.errcode === "number" && parsed.errcode !== 0) ||
+        (typeof parsed.ret === "number" && parsed.ret !== 0)
+      ) {
+        const msg = `WeChat sendMessage logical failure: errcode=${parsed.errcode ?? "?"} ret=${parsed.ret ?? "?"} errmsg=${parsed.errmsg ?? ""}`;
+        this.logger?.logError(msg);
+        // Surface so caller can log it through queueWechatMessage's catch path
+        throw new Error(msg);
+      }
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith("WeChat sendMessage logical failure")) {
+        throw err;
+      }
+      // Body not JSON or unexpected shape — leave the call as a soft success
+      // to preserve historical behaviour.
+    }
   }
 
   private async prepareUpload(
